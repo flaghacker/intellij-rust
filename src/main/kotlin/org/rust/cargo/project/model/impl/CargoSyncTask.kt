@@ -26,11 +26,12 @@ import org.rust.cargo.toolchain.Rustup
 import org.rust.cargo.util.DownloadResult
 import org.rust.ide.notifications.showBalloon
 import org.rust.openapiext.TaskResult
+import java.util.concurrent.CompletableFuture
 
 class CargoSyncTask(
     project: Project,
     private val cargoProjects: List<CargoProjectImpl>,
-    private val onFinish: (List<CargoProjectImpl>) -> Unit
+    private val result: CompletableFuture<List<CargoProjectImpl>>
 ) : Task.Backgroundable(project, "", true), RsTask {
 
     override val taskType: RsTask.TaskType
@@ -60,7 +61,11 @@ class CargoSyncTask(
                 .withStdlib(fetchStdlib(context, indicator))
         }
 
-        onFinish(refreshedProjects)
+        result.complete(refreshedProjects)
+    }
+
+    override fun onThrowable(error: Throwable) {
+        result.completeExceptionally(error)
     }
 
     data class SyncContext(val project: Project, val oldCargoProject: CargoProjectImpl, val toolchain: RustToolchain)

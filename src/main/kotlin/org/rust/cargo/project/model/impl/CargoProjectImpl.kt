@@ -463,8 +463,9 @@ private fun isExistingProject(projects: Collection<CargoProject>, manifest: Path
 
 private fun doRefresh(project: Project, projects: List<CargoProjectImpl>): CompletableFuture<List<CargoProjectImpl>> {
     val result = CompletableFuture<List<CargoProjectImpl>>()
+    val syncTask = CargoSyncTask(project, projects, result)
 
-    val syncTask = CargoSyncTask(project, projects) { updatedProjects ->
+    result.thenApply { updatedProjects ->
         for (p in updatedProjects) {
             val status = p.mergedStatus
             if (status is UpdateStatus.UpdateFailed) {
@@ -477,7 +478,6 @@ private fun doRefresh(project: Project, projects: List<CargoProjectImpl>): Compl
         }
 
         setupProjectRoots(project, updatedProjects)
-        result.complete(updatedProjects)
     }
     project.taskQueue.run(syncTask)
     return result
