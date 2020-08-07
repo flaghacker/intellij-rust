@@ -38,6 +38,7 @@ import com.intellij.util.io.exists
 import com.intellij.util.io.systemIndependentPath
 import org.jdom.Element
 import org.jetbrains.annotations.TestOnly
+import org.rust.RsProjectTaskQueueService
 import org.rust.cargo.CargoConstants
 import org.rust.cargo.CfgOptions
 import org.rust.cargo.project.model.CargoProject
@@ -395,7 +396,7 @@ data class CargoProjectImpl(
     }
 
     // Checks that the project is https://github.com/rust-lang/rust
-    private fun doesProjectLooksLikeRustc(): Boolean {
+    fun doesProjectLooksLikeRustc(): Boolean {
         val workspace = rawWorkspace ?: return false
         // "rustc" package was renamed to "rustc_middle" in https://github.com/rust-lang/rust/pull/70536
         // so starting with rustc 1.42 a stable way to identify it is to try to find any of some possible packages
@@ -405,7 +406,7 @@ data class CargoProjectImpl(
             possiblePackages.any { workspace.findPackage(it) != null }
     }
 
-    private fun withStdlib(result: TaskResult<StandardLibrary>): CargoProjectImpl = when (result) {
+    fun withStdlib(result: TaskResult<StandardLibrary>): CargoProjectImpl = when (result) {
         is TaskResult.Ok -> copy(stdlib = result.value, stdlibStatus = UpdateStatus.UpToDate)
         is TaskResult.Err -> copy(stdlibStatus = UpdateStatus.UpdateFailed(result.reason))
     }
@@ -420,7 +421,7 @@ data class CargoProjectImpl(
             .thenApply(this::withWorkspace)
     }
 
-    private fun withWorkspace(result: TaskResult<CargoWorkspace>): CargoProjectImpl = when (result) {
+    fun withWorkspace(result: TaskResult<CargoWorkspace>): CargoProjectImpl = when (result) {
         is TaskResult.Ok -> copy(rawWorkspace = result.value, workspaceStatus = UpdateStatus.UpToDate)
         is TaskResult.Err -> copy(workspaceStatus = UpdateStatus.UpdateFailed(result.reason))
     }
@@ -435,7 +436,7 @@ data class CargoProjectImpl(
             .thenApply(this::withRustcInfo)
     }
 
-    private fun withRustcInfo(result: TaskResult<RustcInfo>): CargoProjectImpl = when (result) {
+    fun withRustcInfo(result: TaskResult<RustcInfo>): CargoProjectImpl = when (result) {
         is TaskResult.Ok -> copy(rustcInfo = result.value, rustcInfoStatus = UpdateStatus.UpToDate)
         is TaskResult.Err -> copy(rustcInfoStatus = UpdateStatus.UpdateFailed(result.reason))
     }
@@ -461,23 +462,25 @@ private fun isExistingProject(projects: Collection<CargoProject>, manifest: Path
 }
 
 private fun doRefresh(project: Project, projects: List<CargoProjectImpl>): CompletableFuture<List<CargoProjectImpl>> {
-    return projects.map { it.refresh() }
-        .joinAll()
-        .thenApply { updatedProjects ->
-            for (p in updatedProjects) {
-                val status = p.mergedStatus
-                if (status is UpdateStatus.UpdateFailed) {
-                    project.showBalloon(
-                        "Cargo project update failed:<br>${status.reason}",
-                        NotificationType.ERROR
-                    )
-                    break
-                }
-            }
+    val result = CompletableFuture<List<CargoProjectImpl>>()
 
-            setupProjectRoots(project, updatedProjects)
-            updatedProjects
+    val syncTask = CargoSyncTask(project, projects) { updatedProjects ->
+        for (p in updatedProjects) {
+            val status = p.mergedStatus
+            if (status is UpdateStatus.UpdateFailed) {
+                project.showBalloon(
+                    "Cargo project update failed:<br>${status.reason}",
+                    NotificationType.ERROR
+                )
+                break
+            }
         }
+
+        setupProjectRoots(project, updatedProjects)
+        result.complete(updatedProjects)
+    }
+    project.taskQueue.run(syncTask)
+    return result
 }
 
 private fun setupProjectRoots(project: Project, cargoProjects: List<CargoProject>) {
