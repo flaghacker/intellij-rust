@@ -41,31 +41,29 @@ class CargoSyncTask(
         get() = true
 
     override fun run(indicator: ProgressIndicator) {
-        indicator.checkCanceled()
-
         indicator.isIndeterminate = true
 
-        val toolchain = project.toolchain
-        if (toolchain == null) {
-            project.showBalloon(
-                "Cargo project update failed:<br>No Rust toolchain",
-                NotificationType.ERROR
-            )
-            return
+        try {
+            val toolchain = project.toolchain
+            val refreshedProjects = if (toolchain == null) {
+                project.showBalloon(
+                    "Cargo project update failed:<br>No Rust toolchain",
+                    NotificationType.ERROR
+                )
+                cargoProjects
+            } else {
+                cargoProjects.map {
+                    val context = SyncContext(project, it, toolchain)
+                    it.withRustcInfo(fetchRustcInfo(context, indicator))
+                        .withWorkspace(fetchCargoWorkspace(context, indicator))
+                        .withStdlib(fetchStdlib(context, indicator))
+                }
+            }
+            result.complete(refreshedProjects)
+        } catch (e: Throwable) {
+            result.completeExceptionally(e)
+            throw e
         }
-
-        val refreshedProjects = cargoProjects.map {
-            val context = SyncContext(project, it, toolchain)
-            it.withRustcInfo(fetchRustcInfo(context, indicator))
-                .withWorkspace(fetchCargoWorkspace(context, indicator))
-                .withStdlib(fetchStdlib(context, indicator))
-        }
-
-        result.complete(refreshedProjects)
-    }
-
-    override fun onThrowable(error: Throwable) {
-        result.completeExceptionally(error)
     }
 
     data class SyncContext(val project: Project, val oldCargoProject: CargoProjectImpl, val toolchain: RustToolchain)
