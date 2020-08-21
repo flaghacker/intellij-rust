@@ -18,17 +18,17 @@ import org.rust.cargo.util.AutoInjectedCrates.STD
 import org.rust.lang.RsConstants
 import org.rust.lang.RsFileType
 import org.rust.lang.core.crate.Crate
-import org.rust.lang.core.crate.CratePersistentId
-import org.rust.lang.core.macros.MACRO_DOLLAR_CRATE_IDENTIFIER
 import org.rust.lang.core.macros.RangeMap
-import org.rust.lang.core.macros.RsExpandedElement
 import org.rust.lang.core.psi.*
 import org.rust.lang.core.psi.ext.*
 import org.rust.lang.core.resolve.RsModDeclItemData
 import org.rust.lang.core.resolve.collectResolveVariants
 import org.rust.lang.core.resolve.namespaces
 import org.rust.lang.core.resolve.processModDeclResolveVariants
-import org.rust.openapiext.*
+import org.rust.openapiext.fileId
+import org.rust.openapiext.findFileByMaybeRelativePath
+import org.rust.openapiext.toPsiDirectory
+import org.rust.openapiext.toPsiFile
 import kotlin.test.assertEquals
 
 // todo move to facade ?
@@ -151,7 +151,7 @@ class ModCollector(
      */
     private val onAddItem: (ModData, String, PerNs) -> Unit =
         { containingMod, name, perNs -> containingMod.addVisibleItem(name, perNs) }
-) {
+) : ModVisitor {
 
     private val imports: MutableList<Import> get() = context.imports
     private val crate: Crate get() = context.crate
@@ -162,78 +162,29 @@ class ModCollector(
         collectElements(mod)
     }
 
-    fun collectExpandedItems(items: List<RsExpandedElement>) = collectElements(items)
+    fun collectExpandedItems(expandedFile: RsFile) = collectElements(expandedFile)
 
-    /** [itemsOwner] - [RsMod] or [RsForeignModItem] */
-    private fun collectElements(itemsOwner: RsItemsOwner) = collectElements(itemsOwner.itemsAndMacros.toList())
-
-    private fun collectElements(items: List<RsElement>) {
-        // This should be processed eagerly instead of deferred to resolving.
-        // `#[macro_use] extern crate` is hoisted to imports macros before collecting any other items.
-        for (item in items) {
-            if (item is RsExternCrateItem) {
-                collectExternCrate(item)
-            }
-        }
-        for (item in items) {
-            if (item !is RsExternCrateItem) {
-                collectElement(item)
-            }
-        }
+    private fun collectElements(itemsOwner: RsItemsOwner) {
+        ModCollectorBase(this, crate).collectElements(itemsOwner)
         if (isUnitTestMode) {
             modData.checkChildModulesAndVisibleItemsConsistency()
         }
     }
 
-    private fun collectElement(element: RsElement) {
-        when (element) {
-            // impls are not named elements, so we don't need them for name resolution
-            is RsImplItem -> Unit
-
-            is RsForeignModItem -> collectElements(element)
-
-            is RsUseItem -> collectUseItem(element)
-            is RsExternCrateItem -> error("extern crates are processed eagerly")
-
-            is RsItemElement -> collectItem(element)
-
-            is RsMacroCall -> collectMacroCall(element)
-            is RsMacro -> collectMacro(element)
-
-            // `RsOuterAttr`, `RsInnerAttr` or `RsVis` when `itemsOwner` is `RsModItem`
-            // `RsExternAbi` when `itemsOwner` is `RsForeignModItem`
-            // etc
-            else -> Unit
-        }
-    }
-
-    private fun collectUseItem(useItem: RsUseItem) {
-        val isEnabledByCfg = modData.isEnabledByCfg && useItem.isEnabledByCfgSelf(crate)
-        val visibility = useItem.getVisibility(modData, crateRoot, isEnabledByCfg)
-        val hasPreludeImport = useItem.hasPreludeImport
-        val dollarCrateId = useItem.getUserData(RESOLVE_DOLLAR_CRATE_ID_KEY)  // for `use $crate::`
-        useItem.useSpeck?.forEachLeafSpeck { speck ->
-            val import = convertToImport(speck, modData, visibility, hasPreludeImport, dollarCrateId)
-            if (import != null) imports += import
-        }
-    }
-
-    private fun collectExternCrate(externCrate: RsExternCrateItem) {
-        val isEnabledByCfg = modData.isEnabledByCfg && externCrate.isEnabledByCfgSelf(crate)
-        onCollectExternCrate(externCrate, isEnabledByCfg)
+    override fun collectImport(import: ImportStub) {
+        val isEnabledByCfg = modData.isEnabledByCfg && import.isEnabledByCfg
         imports += Import(
-            modData,
-            externCrate.referenceName,
-            externCrate.nameWithAlias,
-            externCrate.getVisibility(modData, crateRoot, isEnabledByCfg),
-            isExternCrate = true,
-            isMacroUse = externCrate.hasMacroUse
+            containingMod = modData,
+            usePath = import.usePath,
+            nameInScope = import.nameInScope,
+            visibility = convertVisibility(import.visibility, isEnabledByCfg),
+            isGlob = import.isGlob,
+            isExternCrate = import.isExternCrate,
+            isMacroUse = import.isPrelude
         )
-    }
 
-    private fun onCollectExternCrate(externCrate: RsExternCrateItem, isEnabledByCfg: Boolean) {
-        if (isUsualCollect && isEnabledByCfg && externCrate.hasMacroUse) {
-            importExternCrateMacros(externCrate.referenceName)
+        if (isUsualCollect && isEnabledByCfg && import.isExternCrate && import.isMacroUse) {
+            importExternCrateMacros(import.usePath)
         }
     }
 
@@ -245,10 +196,9 @@ class ModCollector(
         }
     }
 
-    private fun collectItem(item: RsItemElement) {
+    override fun collectItem(item: RsItemElement) {
         val name = item.name ?: return
         if (item !is RsNamedElement) return
-        if (item is RsFunction && item.isProcMacroDef) return  // todo proc macros
 
         // could be null if `.resolve()` on `RsModDeclItem` returns null
         val childModData = tryCollectChildModule(item)
@@ -271,7 +221,8 @@ class ModCollector(
     /** [name] passed for performance reason, because [RsFile.modName] is slow */
     private fun convertToVisItem(item: RsItemElement, name: String): VisItem? {
         val isEnabledByCfg = modData.isEnabledByCfg && item.isEnabledByCfgSelf(crate)
-        val visibility = (item as? RsVisibilityOwner).getVisibility(modData, crateRoot, isEnabledByCfg)
+        // todo сделать чтобы collectItem принимал ItemStub и положить в ItemStub поле VisibilityStub
+        val visibility = (item as? RsVisibilityOwner)?.getVisibility(isEnabledByCfg) ?: Visibility.Public
         val itemPath = modData.path.append(name)
         val isModOrEnum = item is RsMod || item is RsModDeclItem || item is RsEnumItem
         return VisItem(itemPath, visibility, isModOrEnum)
@@ -358,35 +309,42 @@ class ModCollector(
         return enumModData
     }
 
-    private fun collectMacroCall(call: RsMacroCall) {
-        val isEnabledByCfg = modData.isEnabledByCfg && call.isEnabledByCfgSelf(crate)
+    override fun collectMacroCall(call: MacroCallStub, callPsi: RsMacroCall) {
+        val isEnabledByCfg = modData.isEnabledByCfg && call.isEnabledByCfg
         if (!isEnabledByCfg) return  // todo
-        val body = call.includeMacroArgument?.expr?.value ?: call.macroBody ?: return
-        val bodyHash = call.bodyHash
-        val path = call.path.fullPath
-        val dollarCrateId = call.path.getUserData(RESOLVE_DOLLAR_CRATE_ID_KEY)  // for `$crate::foo!()`
-        val pathAdjusted = adjustPathWithDollarCrate(path, dollarCrateId)
-        val macroDef = if (path.contains("::")) null else modData.legacyMacros[path]
-        val dollarCrateMap = call.getUserData(RESOLVE_RANGE_MAP_KEY) ?: RangeMap.EMPTY
-        context.macroCalls += MacroCallInfo(modData, pathAdjusted, body, bodyHash, macroDepth, macroDef, dollarCrateMap)
+        val bodyHash = callPsi.bodyHash
+        val macroDef = if (call.path.contains("::")) null else modData.legacyMacros[call.path]
+        val dollarCrateMap = callPsi.getUserData(RESOLVE_RANGE_MAP_KEY) ?: RangeMap.EMPTY
+        context.macroCalls += MacroCallInfo(modData, call.path, call.body, bodyHash, macroDepth, macroDef, dollarCrateMap)
     }
 
-    private fun collectMacro(macro: RsMacro) {
-        val isEnabledByCfg = modData.isEnabledByCfg && macro.isEnabledByCfgSelf(crate)
+    override fun collectMacroDef(def: MacroStub, defPsi: RsMacro) {
+        val isEnabledByCfg = modData.isEnabledByCfg && def.isEnabledByCfg
         if (!isEnabledByCfg) return  // todo ?
-        val name = macro.name ?: return
-        // check(macro.stub != null)  // todo
-        val macroBodyStubbed = macro.macroBodyStubbed ?: return
-        val bodyHash = macro.bodyHash ?: return
-        val macroPath = modData.path.append(name)
+        val bodyHash = defPsi.bodyHash ?: return
+        val macroPath = modData.path.append(def.name)
 
-        modData.legacyMacros[name] = MacroInfo(modData.crate, macroPath, macroBodyStubbed, bodyHash)
+        modData.legacyMacros[def.name] = MacroInfo(modData.crate, macroPath, def.macroBodyStubbed, bodyHash)
 
-        if (macro.hasMacroExport) {
+        if (def.hasMacroExport) {
             val visItem = VisItem(macroPath, Visibility.Public)
             val perNs = PerNs(macros = visItem)
-            onAddItem(crateRoot, name, perNs)
+            onAddItem(crateRoot, def.name, perNs)
         }
+    }
+
+    private fun convertVisibility(visibility: VisibilityStub, isEnabledByCfg: Boolean): Visibility {
+        if (!isEnabledByCfg) return Visibility.CfgDisabled
+        return when (visibility) {
+            VisibilityStub.Public -> Visibility.Public
+            is VisibilityStub.Restricted -> resolveRestrictedVisibility(visibility.inPath, crateRoot, modData)
+        }
+    }
+
+    private fun RsVisibilityOwner.getVisibility(isEnabledByCfg: Boolean): Visibility {
+        if (!isEnabledByCfg) return Visibility.CfgDisabled
+        val visibility = VisibilityStub.from(this)
+        return convertVisibility(visibility, isEnabledByCfg)
     }
 }
 
@@ -413,85 +371,12 @@ private fun createExternCrateStdImport(crateRoot: RsFile, crateRootData: ModData
     )
 }
 
-private fun convertToImport(
-    speck: RsUseSpeck,
-    containingMod: ModData,
-    visibility: Visibility,
-    hasPreludeImport: Boolean,
-    dollarCrateId: CratePersistentId?
-): Import? {
-    val isGlob = speck.isStarImport
-    val (usePath, nameInScope) = if (isGlob) {
-        val usePath = speck.getFullPath()
-        val nameInScope = "_"  // todo
-        usePath to nameInScope
-    } else {
-        testAssert { speck.useGroup == null }
-        val path = speck.path
-        val nameInScope = speck.nameInScope
-        path?.fullPath to nameInScope
-    }
-    if (usePath == null || nameInScope == null) return null
-    val usePathAdjusted = adjustPathWithDollarCrate(usePath, dollarCrateId)
-    return Import(containingMod, usePathAdjusted, nameInScope, visibility, isGlob, isPrelude = hasPreludeImport)
-}
-
-private fun RsUseSpeck.getFullPath(): String? {
-    path?.let { return it.fullPath }
-    return when (val parent = parent) {
-        // `use ::*;`  (2015 edition)
-        //        ^ speck
-        is RsUseItem -> "crate"
-        // `use aaa::{self, *};`
-        //                  ^ speck
-        // `use aaa::{{{*}}};`
-        //              ^ speck
-        is RsUseGroup -> (parent.parent as? RsUseSpeck)?.getFullPath()
-        else -> null
-    }
-}
-
-// before: `IntellijRustDollarCrate::foo;`
-// after:  `IntellijRustDollarCrate::12345::foo;`
-//                                   ~~~~~ crateId
-private fun adjustPathWithDollarCrate(path: String, dollarCrateId: CratePersistentId?): String {
-    if (!path.startsWith(MACRO_DOLLAR_CRATE_IDENTIFIER)) return path
-
-    if (dollarCrateId == null) {
-        RESOLVE_LOG.error("Can't find crate for path starting with \$crate: '$path'")
-        return path
-    }
-    return path.replaceFirst(MACRO_DOLLAR_CRATE_IDENTIFIER, "$MACRO_DOLLAR_CRATE_IDENTIFIER::$dollarCrateId")
-}
-
-private fun RsVisibilityOwner?.getVisibility(
-    containingMod: ModData,
-    crateRoot: ModData,
-    // we don't want to use `this.isEnabledByCfg`, because it can trigger resolve when accessing `superMod`
-    isEnabledByCfg: Boolean
-): Visibility {
-    if (this == null) return Visibility.Public
-    if (!isEnabledByCfg) return Visibility.CfgDisabled
-    val vis = vis ?: return Visibility.Restricted(containingMod)
-    return when (vis.stubKind) {
-        RsVisStubKind.PUB -> Visibility.Public
-        RsVisStubKind.CRATE -> Visibility.Restricted(crateRoot)
-        RsVisStubKind.RESTRICTED -> {
-            // https://doc.rust-lang.org/reference/visibility-and-privacy.html#pubin-path-pubcrate-pubsuper-and-pubself
-            val path = vis.visRestriction!!.path
-            resolveRestrictedVisibility(path, crateRoot, containingMod)
-        }
-    }
-}
-
+// https://doc.rust-lang.org/reference/visibility-and-privacy.html#pubin-path-pubcrate-pubsuper-and-pubself
 private fun resolveRestrictedVisibility(
-    path: RsPath,
+    pathText: String,
     crateRoot: ModData,
     containingMod: ModData
 ): Visibility.Restricted {
-    val pathText = path.fullPath.removePrefix("::")  // 2015 edition, absolute paths
-    if (pathText.isEmpty() || pathText == "crate") return Visibility.Restricted(crateRoot)
-
     val segments = pathText.split("::")
     val initialModData = when (segments.first()) {
         "super", "self" -> containingMod

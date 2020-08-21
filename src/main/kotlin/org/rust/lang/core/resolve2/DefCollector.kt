@@ -14,7 +14,10 @@ import com.intellij.util.SmartList
 import org.rust.lang.core.crate.CratePersistentId
 import org.rust.lang.core.macros.*
 import org.rust.lang.core.psi.*
-import org.rust.lang.core.psi.ext.*
+import org.rust.lang.core.psi.ext.RsElement
+import org.rust.lang.core.psi.ext.body
+import org.rust.lang.core.psi.ext.bodyTextRange
+import org.rust.lang.core.psi.ext.stubDescendantsOfTypeStrict
 import org.rust.lang.core.resolve.DEFAULT_RECURSION_LIMIT
 import org.rust.lang.core.resolve2.ImportType.GLOB
 import org.rust.lang.core.resolve2.ImportType.NAMED
@@ -286,21 +289,18 @@ class DefCollector(
         val expander = MacroExpander(project)
         val expanderShared = MacroExpansionShared.getInstance()
         return runReadAction {
-            data class Tuple4<A, B, C, D>(val a: A, val b: B, val c: C, val d: D)
-
             val useExpansionCache = true
-            val (expandedText, expandedFile, expandedItems, ranges) = if (useExpansionCache) {
+            val (expandedText, expandedFile, ranges) = if (useExpansionCache) {
                 val (expandedFile, ranges) = expanderShared.createExpansionPsi(project, expander, defData, callData)
                     ?: return@runReadAction true
-                val expandedItems = expandedFile.stubChildrenOfType<RsExpandedElement>()
-                Tuple4(expandedFile.text, expandedFile, expandedItems, ranges)
+                Triple(expandedFile.text, expandedFile, ranges)
             } else {
                 val psiFactory = RsPsiFactory(project)
                 val (expandedText, ranges) = expander.expandMacroAsText(defData.data, callData.data)
                     ?: return@runReadAction true
                 val expansion = parseExpandedTextWithContext(MacroExpansionContext.ITEM, psiFactory, expandedText)
                     ?: return@runReadAction true
-                Tuple4(expandedText, expansion.file, expansion.elements, ranges)
+                Triple(expandedText, expansion.file, ranges)
             }
 
             processDollarCrate(call, def, expandedText, ranges, expandedFile)
@@ -308,7 +308,7 @@ class DefCollector(
             // Note: we don't need to call [RsExpandedElement.setContext] for [expansion.elements],
             // because it is needed only for [RsModDeclItem], and we use our own resolve for [RsModDeclItem]
 
-            processExpandedItems(call.containingMod, expandedItems, call.depth + 1)
+            processExpandedItems(call.containingMod, expandedFile, call.depth + 1)
             true
         }
     }
@@ -409,12 +409,11 @@ class DefCollector(
                 ?.toPsiFile(project)
                 ?.rustFile
                 ?: return@runReadAction
-            val items = includingFile.stubChildrenOfType<RsExpandedElement>()
-            processExpandedItems(modData, items, call.depth + 1)
+            processExpandedItems(modData, includingFile, call.depth + 1)
         }
     }
 
-    private fun processExpandedItems(containingMod: ModData, items: List<RsExpandedElement>, macroDepth: Int) {
+    private fun processExpandedItems(containingMod: ModData, expandedFile: RsFile, macroDepth: Int) {
         if (macroDepth > DEFAULT_RECURSION_LIMIT) return
 
         val onAddItem: (ModData, String, PerNs) -> Unit = { modData, name, perNs ->
@@ -422,7 +421,7 @@ class DefCollector(
             update(modData, listOf(name to perNs), visibility, NAMED)
         }
         val collector = ModCollector(containingMod, defMap, defMap.root, context, macroDepth, onAddItem = onAddItem)
-        collector.collectExpandedItems(items)
+        collector.collectExpandedItems(expandedFile)
     }
 }
 
