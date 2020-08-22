@@ -6,8 +6,12 @@
 package org.rust.lang.core.resolve2
 
 import com.intellij.openapi.diagnostic.Logger
+import com.intellij.openapi.editor.Document
+import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.openapiext.isUnitTestMode
 import com.intellij.psi.FileViewProvider
+import com.intellij.psi.PsiFile
+import com.intellij.util.io.IOUtil
 import org.rust.cargo.project.workspace.CargoWorkspace
 import org.rust.lang.core.crate.CratePersistentId
 import org.rust.lang.core.psi.RsEnumVariant
@@ -17,9 +21,10 @@ import org.rust.lang.core.psi.ext.containingCrate
 import org.rust.lang.core.psi.ext.superMods
 import org.rust.lang.core.resolve.Namespace
 import org.rust.openapiext.fileId
+import org.rust.openapiext.testAssert
 import org.rust.stdext.HashCode
 import java.io.DataInputStream
-import java.io.DataOutputStream
+import java.io.DataOutput
 
 class DefDatabase(
     /** `DefMap`s for some crate and all its dependencies (including transitive) */
@@ -50,13 +55,25 @@ class DefDatabase(
 typealias FileId = Int
 
 class FileInfo(
-    /** Result of [FileViewProvider.getModificationStamp] - survives IDE restart (todo false?) */
+    /**
+     * Result of [FileViewProvider.getModificationStamp].
+     *
+     * Here are possible (other) methods to use:
+     * - [PsiFile.getModificationStamp]
+     * - [FileViewProvider.getModificationStamp]
+     * - [VirtualFile.getModificationStamp]
+     * - [VirtualFile.getModificationCount]
+     * - [Document.getModificationStamp]  // todo ?
+     *
+     * Notes:
+     * - [VirtualFile] methods update only after file is saved to disk
+     * - Only [VirtualFile.getModificationCount] survive IDE restart
+     */
     val modificationStamp: Long,
     /** Optimization for [CrateDefMap.getModData] */
-    val modData: ModData
-) {
-    lateinit var hash: HashCode
-}
+    val modData: ModData,
+    val hash: HashCode
+)
 
 // todo вынести поля нужные только на этапе построения в collector ?
 class CrateDefMap(
@@ -74,6 +91,10 @@ class CrateDefMap(
     // todo сделать DefDatabase интерфейсом и использовать другую реализацию (которая вызывает `crate.defMap`) после построения текущей DefMap ?
     val defDatabase: DefDatabase = DefDatabase(allDependenciesDefMaps + (crate to this))
 
+    /**
+     * File included via `include!` macro has same [FileInfo.modData] as main file,
+     * but different [FileInfo.hash] and [FileInfo.modificationStamp]
+     */
     val fileInfos: MutableMap<FileId, FileInfo> = hashMapOf()
 
     fun getModData(modPath: ModPath): ModData? {
@@ -97,7 +118,11 @@ class CrateDefMap(
                 check(isUnitTestMode)  // todo
                 return getModDataSlow(mod)
             }
-            return fileInfos[virtualFile.fileId]?.modData
+            val fileInfo = fileInfos[virtualFile.fileId]
+            // todo если здесь возникнет exception, то RsBuildDefMapTest всё равно пройдёт
+            // Note: we don't expand cfg-disabled macros (it can contain mod declaration)
+            testAssert { fileInfo != null || !mod.isDeeplyEnabledByCfg }
+            return fileInfo?.modData
         }
         val parentMod = mod.`super` ?: return null
         val parentModData = getModDataFast(parentMod) ?: return null
@@ -130,11 +155,11 @@ class CrateDefMap(
         }
     }
 
-    fun addVisitedFile(file: RsFile, modData: ModData) {
+    fun addVisitedFile(file: RsFile, modData: ModData, fileHash: HashCode) {
         val fileId = file.virtualFile.fileId
         // TOdO: File included in module tree multiple times ?
         // testAssert { fileId !in fileInfos }
-        fileInfos[fileId] = FileInfo(file.viewProvider.modificationStamp, modData)
+        fileInfos[fileId] = FileInfo(file.viewProvider.modificationStamp, modData, fileHash)
     }
 
     override fun toString(): String = crateDescription
@@ -209,15 +234,6 @@ class ModData(
     fun getNthParent(n: Int): ModData? {
         check(n >= 0)
         return parents.drop(n).firstOrNull()
-    }
-
-    fun visitDescendantModules(visitor: (ModData) -> Boolean) {
-        val visitSubtree = visitor(this)
-        if (visitSubtree) {
-            for (childModData in childModules.values) {
-                childModData.visitDescendantModules(visitor)
-            }
-        }
     }
 
     override fun toString(): String = "ModData(path=$path, crate=$crate)"
@@ -358,7 +374,7 @@ sealed class Visibility {
             CfgDisabled -> "CfgDisabled"
         }
 
-    fun writeTo(data: DataOutputStream, withCrate: Boolean) {
+    fun writeTo(data: DataOutput, withCrate: Boolean) {
         when (this) {
             is Public -> data.writeByte(0)
             is Restricted -> {
@@ -386,10 +402,9 @@ data class ModPath(
 
     override fun toString(): String = path.ifEmpty { "crate" }
 
-    fun writeTo(data: DataOutputStream, withCrate: Boolean) {
+    fun writeTo(data: DataOutput, withCrate: Boolean) {
         if (withCrate) data.writeInt(crate)
-        // todo writeUTFFast ?
-        data.writeUTF(path)
+        IOUtil.writeUTF(data, path)
     }
 
     companion object {

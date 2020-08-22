@@ -11,6 +11,7 @@ import com.intellij.openapi.util.Key
 import com.intellij.openapi.util.TextRange
 import com.intellij.openapi.vfs.newvfs.persistent.PersistentFS
 import com.intellij.util.SmartList
+import com.intellij.util.io.IOUtil
 import org.rust.lang.core.crate.CratePersistentId
 import org.rust.lang.core.macros.*
 import org.rust.lang.core.psi.*
@@ -27,7 +28,7 @@ import org.rust.openapiext.findFileByMaybeRelativePath
 import org.rust.openapiext.testAssert
 import org.rust.openapiext.toPsiFile
 import org.rust.stdext.HashCode
-import java.io.DataOutputStream
+import java.io.DataOutput
 
 /** Resolves all imports (and adds to [defMap]) using fixed point iteration algorithm */
 class DefCollector(
@@ -308,7 +309,7 @@ class DefCollector(
             // Note: we don't need to call [RsExpandedElement.setContext] for [expansion.elements],
             // because it is needed only for [RsModDeclItem], and we use our own resolve for [RsModDeclItem]
 
-            processExpandedItems(call.containingMod, expandedFile, call.depth + 1)
+            processExpandedItems(call.containingMod, expandedFile, call.depth + 1, calculateHash = false)
             true
         }
     }
@@ -409,19 +410,32 @@ class DefCollector(
                 ?.toPsiFile(project)
                 ?.rustFile
                 ?: return@runReadAction
-            processExpandedItems(modData, includingFile, call.depth + 1)
+            processExpandedItems(modData, includingFile, call.depth + 1, calculateHash = true)
         }
     }
 
-    private fun processExpandedItems(containingMod: ModData, expandedFile: RsFile, macroDepth: Int) {
+    private fun processExpandedItems(
+        containingMod: ModData,
+        expandedFile: RsFile,
+        macroDepth: Int,
+        calculateHash: Boolean
+    ) {
         if (macroDepth > DEFAULT_RECURSION_LIMIT) return
 
         val onAddItem: (ModData, String, PerNs) -> Unit = { modData, name, perNs ->
             val visibility = (perNs.types ?: perNs.values ?: perNs.macros)!!.visibility
             update(modData, listOf(name to perNs), visibility, NAMED)
         }
-        val collector = ModCollector(containingMod, defMap, defMap.root, context, macroDepth, onAddItem = onAddItem)
-        collector.collectExpandedItems(expandedFile)
+        val collector = ModCollector(
+            modData = containingMod,
+            defMap = defMap,
+            crateRoot = defMap.root,
+            context = context,
+            macroDepth = macroDepth,
+            calculateHash = calculateHash,
+            onAddItem = onAddItem
+        )
+        collector.collectFile(expandedFile)
     }
 }
 
@@ -443,18 +457,6 @@ data class Import(
     val isPrelude: Boolean = false  // #[prelude_import]
 ) {
     var status: PartialResolvedImport = Unresolved
-
-    fun writeTo(data: DataOutputStream) {
-        containingMod.path.writeTo(data, withCrate = false)
-        data.writeUTF(usePath)
-        data.writeUTF(nameInScope)
-        visibility.writeTo(data, withCrate = false)
-        // todo use one byte
-        data.writeBoolean(isGlob)
-        data.writeBoolean(isExternCrate)
-        data.writeBoolean(isMacroUse)
-        data.writeBoolean(isPrelude)
-    }
 }
 
 enum class ImportType { NAMED, GLOB }
@@ -492,10 +494,10 @@ class MacroCallInfo(
 ) {
     override fun toString(): String = "${containingMod.path}:  $path! { $body }"
 
-    fun writeTo(data: DataOutputStream) {
+    fun writeTo(data: DataOutput) {
         containingMod.path.writeTo(data, withCrate = false)
-        data.writeUTF(path)
-        data.writeUTF(body)
+        IOUtil.writeUTF(data, path)
+        IOUtil.writeUTF(data, body)
     }
 }
 

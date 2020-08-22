@@ -95,12 +95,12 @@ fun buildDefMapContainingExplicitItems(context: CollectorContext): CrateDefMap? 
         crate.toString()
     )
 
-    val collector = ModCollector(crateRootData, defMap, crateRootData, context)
+    val collector = ModCollector(crateRootData, defMap, crateRootData, context, calculateHash = true)
     createExternCrateStdImport(crateRoot, crateRootData)?.let {
         context.imports += it
         collector.importExternCrateMacros(it.usePath)
     }
-    collector.collectMod(crateRoot)
+    collector.collectFile(crateRoot)
 
     removeInvalidImportsAndMacroCalls(defMap, context)
     context.imports  // imports from nested modules first
@@ -122,7 +122,7 @@ private fun getInitialExternPrelude(crate: Crate): MutableMap<String, ModData> {
  * It could happen if there is cfg-disabled module, which we collect first (with its imports)
  * And then cfg-enabled module overrides previously created [ModData]
  */
-fun removeInvalidImportsAndMacroCalls(defMap: CrateDefMap, context: CollectorContext) {
+private fun removeInvalidImportsAndMacroCalls(defMap: CrateDefMap, context: CollectorContext) {
     fun ModData.descendantsMods(): Sequence<ModData> =
         sequenceOf(this) + childModules.values.asSequence().flatMap { it.descendantsMods() }
 
@@ -137,12 +137,8 @@ class ModCollector(
     private val crateRoot: ModData,
     private val context: CollectorContext,
     private val macroDepth: Int = 0,
-    /**
-     * `true` when collecting during building DefMap.
-     * `false` when collecting during calculating file hash
-     */
-    // todo refactor (make abstract class?)
-    private val isUsualCollect: Boolean = true,
+    private val calculateHash: Boolean,
+    parentHashCalculator: HashCalculator? = null,
     /**
      * called when new [RsItemElement] is found
      * default behaviour: just add it to [ModData.visibleItems]
@@ -153,27 +149,39 @@ class ModCollector(
         { containingMod, name, perNs -> containingMod.addVisibleItem(name, perNs) }
 ) : ModVisitor {
 
-    private val imports: MutableList<Import> get() = context.imports
+    private var hashCalculator: HashCalculator? = parentHashCalculator
+
     private val crate: Crate get() = context.crate
     private val project: Project get() = context.project
 
-    fun collectMod(mod: RsMod) {
-        if (isUsualCollect && mod is RsFile) defMap.addVisitedFile(mod, modData)
-        collectElements(mod)
-    }
+    fun collectFile(file: RsFile) {
+        if (calculateHash) {
+            hashCalculator = HashCalculator()
+        }
+        collectMod(file)
+        if (calculateHash) {
+            val fileHash = hashCalculator!!.getFileHash()
+            defMap.addVisitedFile(file, modData, fileHash)
+        }
 
-    fun collectExpandedItems(expandedFile: RsFile) = collectElements(expandedFile)
-
-    private fun collectElements(itemsOwner: RsItemsOwner) {
-        ModCollectorBase(this, crate).collectElements(itemsOwner)
         if (isUnitTestMode) {
             modData.checkChildModulesAndVisibleItemsConsistency()
         }
     }
 
-    override fun collectImport(import: ImportStub) {
+    private fun collectMod(mod: RsMod) {
+        val visitor = if (calculateHash) {
+            val hashVisitor = hashCalculator!!.getVisitor(crate, modData.fileRelativePath)
+            CompositeModVisitor(hashVisitor, this)
+        } else {
+            this
+        }
+        ModCollectorBase(visitor, crate).collectMod(mod)
+    }
+
+    override fun collectImport(import: ImportLight) {
         val isEnabledByCfg = modData.isEnabledByCfg && import.isEnabledByCfg
-        imports += Import(
+        context.imports += Import(
             containingMod = modData,
             usePath = import.usePath,
             nameInScope = import.nameInScope,
@@ -183,7 +191,7 @@ class ModCollector(
             isMacroUse = import.isPrelude
         )
 
-        if (isUsualCollect && isEnabledByCfg && import.isExternCrate && import.isMacroUse) {
+        if (isEnabledByCfg && import.isExternCrate && import.isMacroUse) {
             importExternCrateMacros(import.usePath)
         }
     }
@@ -196,14 +204,14 @@ class ModCollector(
         }
     }
 
-    override fun collectItem(item: RsItemElement) {
-        val name = item.name ?: return
-        if (item !is RsNamedElement) return
+    override fun collectItem(item: ItemLight, itemPsi: RsItemElement) {
+        val name = item.name
+        if (itemPsi !is RsNamedElement) return
 
         // could be null if `.resolve()` on `RsModDeclItem` returns null
-        val childModData = tryCollectChildModule(item)
+        val childModData = tryCollectChildModule(item, itemPsi)
 
-        val visItem = convertToVisItem(item, name) ?: return
+        val visItem = convertToVisItem(item, itemPsi) ?: return
         val perNs = PerNs(visItem, item.namespaces)
         if (visItem.isModOrEnum && childModData == null) {
             perNs.types = null
@@ -219,36 +227,28 @@ class ModCollector(
 
     // todo причём здесь RsFile ?
     /** [name] passed for performance reason, because [RsFile.modName] is slow */
-    private fun convertToVisItem(item: RsItemElement, name: String): VisItem? {
-        val isEnabledByCfg = modData.isEnabledByCfg && item.isEnabledByCfgSelf(crate)
-        // todo сделать чтобы collectItem принимал ItemStub и положить в ItemStub поле VisibilityStub
-        val visibility = (item as? RsVisibilityOwner)?.getVisibility(isEnabledByCfg) ?: Visibility.Public
-        val itemPath = modData.path.append(name)
-        val isModOrEnum = item is RsMod || item is RsModDeclItem || item is RsEnumItem
+    private fun convertToVisItem(item: ItemLight, itemPsi: RsItemElement): VisItem? {
+        val isEnabledByCfg = modData.isEnabledByCfg && item.isEnabledByCfg
+        val visibility = convertVisibility(item.visibility, isEnabledByCfg)
+        val itemPath = modData.path.append(item.name)
+        val isModOrEnum = itemPsi is RsMod || itemPsi is RsModDeclItem || itemPsi is RsEnumItem
         return VisItem(itemPath, visibility, isModOrEnum)
     }
 
-    private fun tryCollectChildModule(item: RsItemElement): ModData? {
-        if (item is RsEnumItem) return collectEnumAsModData(item)
+    private fun tryCollectChildModule(itemLight: ItemLight, item: RsItemElement): ModData? {
+        if (item is RsEnumItem) return collectEnumAsModData(itemLight, item)
 
         val (childMod, hasMacroUse, pathAttribute) = when (item) {
             is RsModItem -> Triple(item, item.hasMacroUse, item.pathAttribute)
             is RsModDeclItem -> {
-                val childMod: RsMod = if (isUsualCollect) {
-                    item.resolve(modData, project) ?: return null
-                } else {
-                    // We can't just return `null` because then `item` will not be added to `visibleItems`.
-                    // todo: use singleton ?
-                    RsPsiFactory(project).createModItem("__tmp__", "")
-                }
+                val childMod: RsMod = item.resolve(modData, project) ?: return null
                 Triple(childMod, item.hasMacroUse, item.pathAttribute)
             }
             else -> return null
         }
         // Note: don't use `childMod.isEnabledByCfgSelf`, because `isEnabledByCfg` doesn't work for `RsFile`
-        val childModName = item.name ?: return null
-        val isEnabledByCfg = modData.isEnabledByCfg && item.isEnabledByCfgSelf(crate)
-        val childModData = collectChildModule(childMod, childModName, isEnabledByCfg, pathAttribute)
+        val isEnabledByCfg = modData.isEnabledByCfg && itemLight.isEnabledByCfg
+        val childModData = collectChildModule(childMod, itemLight.name, isEnabledByCfg, pathAttribute)
         if (hasMacroUse && isEnabledByCfg) modData.legacyMacros += childModData.legacyMacros
         return childModData
     }
@@ -282,34 +282,46 @@ class ModCollector(
         // todo не делать если вызывается из expandMacros ?
         childModData.legacyMacros += modData.legacyMacros
 
-        val collector = ModCollector(childModData, defMap, crateRoot, context)
-        collector.collectMod(childMod)
+        val collector = ModCollector(
+            modData = childModData,
+            defMap = defMap,
+            crateRoot = crateRoot,
+            context = context,
+            calculateHash = calculateHash || childMod is RsFile,
+            parentHashCalculator = hashCalculator
+        )
+        if (childMod is RsFile) {
+            collector.collectFile(childMod)
+        } else {
+            collector.collectMod(childMod)
+        }
         return childModData
     }
 
-    private fun collectEnumAsModData(enum: RsEnumItem): ModData {
-        val enumName = enum.name!!  // todo
+    private fun collectEnumAsModData(enumLight: ItemLight, enum: RsEnumItem): ModData {
+        val enumName = enumLight.name
         val enumPath = modData.path.append(enumName)
-        val enumModData = ModData(
+        val enumData = ModData(
             parent = modData,
             crate = modData.crate,
             path = enumPath,
-            isEnabledByCfg = modData.isEnabledByCfg && enum.isEnabledByCfgSelf(crate),
+            isEnabledByCfg = modData.isEnabledByCfg && enumLight.isEnabledByCfg,
             fileId = modData.fileId,
             fileRelativePath = "${modData.fileRelativePath}::$enumName",
             ownedDirectoryId = modData.ownedDirectoryId,  // actually can use any value here
             isEnum = true
         )
-        for (variant in enum.variants) {
-            val variantName = variant.name ?: continue
+        for (variantPsi in enum.variants) {
+            val variantName = variantPsi.name ?: continue
             val variantPath = enumPath.append(variantName)
-            val visItem = VisItem(variantPath, Visibility.Public)
-            enumModData.visibleItems[variantName] = PerNs(visItem, variant.namespaces)
+            val variantVisibility = if (enumData.isEnabledByCfg) Visibility.Public else Visibility.CfgDisabled
+            val variant = VisItem(variantPath, variantVisibility)
+            enumData.visibleItems[variantName] = PerNs(variant, variantPsi.namespaces)
         }
-        return enumModData
+        return enumData
     }
 
-    override fun collectMacroCall(call: MacroCallStub, callPsi: RsMacroCall) {
+    override fun collectMacroCall(call: MacroCallLight, callPsi: RsMacroCall) {
         val isEnabledByCfg = modData.isEnabledByCfg && call.isEnabledByCfg
         if (!isEnabledByCfg) return  // todo
         val bodyHash = callPsi.bodyHash
@@ -318,13 +330,13 @@ class ModCollector(
         context.macroCalls += MacroCallInfo(modData, call.path, call.body, bodyHash, macroDepth, macroDef, dollarCrateMap)
     }
 
-    override fun collectMacroDef(def: MacroStub, defPsi: RsMacro) {
+    override fun collectMacroDef(def: MacroDefLight, defPsi: RsMacro) {
         val isEnabledByCfg = modData.isEnabledByCfg && def.isEnabledByCfg
         if (!isEnabledByCfg) return  // todo ?
         val bodyHash = defPsi.bodyHash ?: return
         val macroPath = modData.path.append(def.name)
 
-        modData.legacyMacros[def.name] = MacroInfo(modData.crate, macroPath, def.macroBodyStubbed, bodyHash)
+        modData.legacyMacros[def.name] = MacroInfo(modData.crate, macroPath, def.macroBody, bodyHash)
 
         if (def.hasMacroExport) {
             val visItem = VisItem(macroPath, Visibility.Public)
@@ -333,18 +345,12 @@ class ModCollector(
         }
     }
 
-    private fun convertVisibility(visibility: VisibilityStub, isEnabledByCfg: Boolean): Visibility {
+    private fun convertVisibility(visibility: VisibilityLight, isEnabledByCfg: Boolean): Visibility {
         if (!isEnabledByCfg) return Visibility.CfgDisabled
         return when (visibility) {
-            VisibilityStub.Public -> Visibility.Public
-            is VisibilityStub.Restricted -> resolveRestrictedVisibility(visibility.inPath, crateRoot, modData)
+            VisibilityLight.Public -> Visibility.Public
+            is VisibilityLight.Restricted -> resolveRestrictedVisibility(visibility.inPath, crateRoot, modData)
         }
-    }
-
-    private fun RsVisibilityOwner.getVisibility(isEnabledByCfg: Boolean): Visibility {
-        if (!isEnabledByCfg) return Visibility.CfgDisabled
-        val visibility = VisibilityStub.from(this)
-        return convertVisibility(visibility, isEnabledByCfg)
     }
 }
 

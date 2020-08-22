@@ -12,7 +12,6 @@ import com.intellij.openapi.project.Project
 import org.rust.lang.core.crate.Crate
 import org.rust.lang.core.crate.CratePersistentId
 import org.rust.lang.core.crate.crateGraph
-import org.rust.lang.core.psi.RsFile
 import org.rust.lang.core.psi.rustPsiManager
 import org.rust.openapiext.fileId
 import org.rust.openapiext.testAssert
@@ -71,7 +70,6 @@ fun buildDefMap(crate: Crate, indicator: ProgressIndicator): CrateDefMap? {
         buildDefMapContainingExplicitItems(context)
     } ?: return null
     DefCollector(project, defMap, context).collect()
-    calculateHashForAllFiles(defMap, context)
     project.defMapService.fileModificationStamps += defMap.fileInfos
         .mapValues { (_, info) -> info.modificationStamp to defMap.crate }
     return defMap
@@ -116,69 +114,12 @@ private fun getChangedCratesNew(defMapService: DefMapService, indicator: Progres
         runReadAction {
             // todo
             val defMap = file.project.crateGraph.findCrateById(crate)?.defMap ?: return@runReadAction
-            if (isFileChanged(file, defMap, indicator)) {
+            if (isFileChanged(file, defMap)) {
                 changedCratesNew += crate
             }
         }
     }
     return changedCratesNew
-}
-
-private fun isFileChanged(file: RsFile, defMap: CrateDefMap, indicator: ProgressIndicator): Boolean {
-    // todo return это ок ?
-    val fileInfo = defMap.fileInfos[file.virtualFile.fileId] ?: return false
-    val crateId = defMap.crate
-    // todo ?
-    val crate = runReadAction { file.project.crateGraph.findCrateById(crateId) } ?: return false
-
-    // todo indicator
-    val context = CollectorContext(crate, indicator)
-    val (fileModDataFake, crateRootDataFake, defMapFake) = prepareFakeModData(defMap, fileInfo.modData, crateId)
-    ModCollector(fileModDataFake, defMapFake, crateRootDataFake, context, isUsualCollect = false).collectMod(file)
-
-    val hash = calculateFileHash(fileModDataFake, context)
-    return hash != fileInfo.hash
-}
-
-// todo найти способ получше?  хотя бы без defMapFake
-private fun prepareFakeModData(
-    defMap: CrateDefMap,
-    fileModData: ModData,
-    crateId: CratePersistentId
-): Triple<ModData, ModData, CrateDefMap> {
-    val crateRootDataFake = ModData(
-        parent = null,
-        crate = crateId,
-        path = ModPath(crateId, emptyList()),
-        isEnabledByCfg = true,
-        fileId = defMap.root.fileId,
-        fileRelativePath = "",
-        ownedDirectoryId = defMap.root.ownedDirectoryId
-    )
-    val defMapFake = CrateDefMap(
-        crate = crateId,
-        edition = defMap.edition,
-        root = crateRootDataFake,
-        // dependencies and prelude should not be used in [ModCollector]
-        externPrelude = hashMapOf(),
-        directDependenciesDefMaps = hashMapOf(),
-        allDependenciesDefMaps = hashMapOf(),
-        prelude = null,
-        crateDescription = defMap.crateDescription
-    )
-    val fileModDataFake = fileModData.parents.toList().asReversed()
-        .fold(crateRootDataFake) { parentFake, modData ->
-            ModData(
-                parent = parentFake,
-                crate = crateId,
-                path = modData.path,
-                isEnabledByCfg = true,
-                fileId = modData.fileId,
-                fileRelativePath = modData.fileRelativePath,
-                ownedDirectoryId = modData.ownedDirectoryId
-            )
-        }
-    return Triple(fileModDataFake, crateRootDataFake, defMapFake)
 }
 
 private fun topSortCratesAndAddReverseDependencies(crateIds: Set<CratePersistentId>, project: Project): List<Crate> {

@@ -17,7 +17,6 @@ import org.rust.lang.core.psi.RsModItem
 import org.rust.lang.core.psi.ext.*
 import org.rust.lang.core.resolve.*
 import org.rust.lang.core.resolve.ItemProcessingMode.WITHOUT_PRIVATE_IMPORTS
-import org.rust.lang.core.resolve2.Visibility.CfgDisabled
 import org.rust.openapiext.toPsiFile
 
 const val IS_NEW_RESOLVE_ENABLED: Boolean = true
@@ -31,23 +30,25 @@ fun processItemDeclarations2(
 ): Boolean {
     val project = scope.project
     val defMap = getDefMap(scope) ?: return false
-    // todo optimization: добавить в CrateDefMap мапку из fileId в ModData
     val modData = defMap.getModData(scope) ?: return false
 
     modData.visibleItems.processEntriesWithName(processor.name) { name, perNs ->
         fun /* todo inline */ VisItem.tryConvertToPsi(namespace: Namespace): RsNamedElement? {
             if (namespace !in ns) return null
-            if (visibility.isInvisible && ipm === WITHOUT_PRIVATE_IMPORTS) return null
+            if (visibility === Visibility.Invisible && ipm === WITHOUT_PRIVATE_IMPORTS) return null
 
             val item = toPsi(defMap.defDatabase, project, namespace) ?: return null
 
-            if ((visibility === CfgDisabled) != !item.isEnabledByCfg) return null
+            // todo ?
+            if (visibility === Visibility.CfgDisabled) return null
+            // if ((visibility === CfgDisabled) != !item.isEnabledByCfg) return null
 
             val itemNamespaces = item.namespaces
             if (itemNamespaces == TYPES_N_VALUES) {
                 // We will provide `item` only in [Namespace.Types]
                 if (Namespace.Types in ns && namespace == Namespace.Values) return null
             } else {
+                // todo
                 check(itemNamespaces.size == 1)
             }
             return item

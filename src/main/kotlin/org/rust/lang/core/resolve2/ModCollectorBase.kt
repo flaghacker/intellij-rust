@@ -5,12 +5,16 @@
 
 package org.rust.lang.core.resolve2
 
+import com.intellij.util.io.IOUtil
 import org.rust.lang.core.crate.Crate
 import org.rust.lang.core.crate.CratePersistentId
 import org.rust.lang.core.macros.MACRO_DOLLAR_CRATE_IDENTIFIER
 import org.rust.lang.core.psi.*
 import org.rust.lang.core.psi.ext.*
+import org.rust.lang.core.resolve.Namespace
+import org.rust.lang.core.resolve.namespaces
 import org.rust.openapiext.testAssert
+import java.io.DataOutput
 
 /**
  * This class is used:
@@ -20,8 +24,13 @@ import org.rust.openapiext.testAssert
  */
 class ModCollectorBase(val visitor: ModVisitor, val crate: Crate) {
 
+    fun collectMod(mod: RsMod) {
+        collectElements(mod)
+        visitor.afterCollectMod()
+    }
+
     /** [itemsOwner] - [RsMod] or [RsForeignModItem] */
-    fun collectElements(itemsOwner: RsItemsOwner) {
+    private fun collectElements(itemsOwner: RsItemsOwner) {
         val items = itemsOwner.itemsAndMacros.toList()
 
         // This should be processed eagerly instead of deferred to resolving.
@@ -62,13 +71,13 @@ class ModCollectorBase(val visitor: ModVisitor, val crate: Crate) {
 
     private fun collectUseItem(useItem: RsUseItem) {
         val isEnabledByCfg = useItem.isEnabledByCfgSelf(crate)
-        val visibility = VisibilityStub.from(useItem)
+        val visibility = VisibilityLight.from(useItem)
         val hasPreludeImport = useItem.hasPreludeImport
         // todo move dollarCrateId from RsUseItem to RsPath
         val dollarCrateId = useItem.getUserData(RESOLVE_DOLLAR_CRATE_ID_KEY)  // for `use $crate::`
         useItem.useSpeck?.forEachLeafSpeck { speck ->
             val (usePath, nameInScope) = speck.getFullPathAndNameInScope() ?: return@forEachLeafSpeck
-            val import = ImportStub(
+            val import = ImportLight(
                 usePath = adjustPathWithDollarCrate(usePath, dollarCrateId),
                 nameInScope = nameInScope,
                 visibility = visibility,
@@ -81,10 +90,10 @@ class ModCollectorBase(val visitor: ModVisitor, val crate: Crate) {
     }
 
     private fun collectExternCrate(externCrate: RsExternCrateItem) {
-        val import = ImportStub(
+        val import = ImportLight(
             usePath = externCrate.referenceName,
             nameInScope = externCrate.nameWithAlias,
-            visibility = VisibilityStub.from(externCrate),
+            visibility = VisibilityLight.from(externCrate),
             isEnabledByCfg = externCrate.isEnabledByCfgSelf(crate),
             isExternCrate = true,
             isMacroUse = externCrate.hasMacroUse
@@ -93,10 +102,16 @@ class ModCollectorBase(val visitor: ModVisitor, val crate: Crate) {
     }
 
     private fun collectItem(item: RsItemElement) {
-        if (item.name == null) return
+        val name = item.name ?: return
         if (item !is RsNamedElement) return
         if (item is RsFunction && item.isProcMacroDef) return  // todo proc macros
-        visitor.collectItem(item)
+        val itemLight = ItemLight(
+            name = name,
+            visibility = VisibilityLight.from(item),
+            isEnabledByCfg = item.isEnabledByCfgSelf(crate),
+            namespaces = item.namespaces
+        )
+        visitor.collectItem(itemLight, item)
     }
 
     private fun collectMacroCall(call: RsMacroCall) {
@@ -106,38 +121,80 @@ class ModCollectorBase(val visitor: ModVisitor, val crate: Crate) {
         // todo move dollarCrateId from RsMacro to RsPath
         val dollarCrateId = call.path.getUserData(RESOLVE_DOLLAR_CRATE_ID_KEY)  // for `$crate::foo!()`
         val pathAdjusted = adjustPathWithDollarCrate(path, dollarCrateId)
-        val callStub = MacroCallStub(pathAdjusted, body, isEnabledByCfg)
-        visitor.collectMacroCall(callStub, call)
+        val callLight = MacroCallLight(pathAdjusted, body, isEnabledByCfg)
+        visitor.collectMacroCall(callLight, call)
     }
 
     private fun collectMacroDef(def: RsMacro) {
         // check(def.stub != null)  // todo
-        val defStub = MacroStub(
+        val defLight = MacroDefLight(
             name = def.name ?: return,
-            macroBodyStubbed = def.macroBodyStubbed ?: return,
+            macroBodyText = def.greenStub?.macroBody ?: def.macroBodyStubbed?.text ?: return,
+            macroBody = def.macroBodyStubbed ?: return,
             hasMacroExport = def.hasMacroExport,
             isEnabledByCfg = def.isEnabledByCfgSelf(crate)
         )
-        visitor.collectMacroDef(defStub, def)
+        visitor.collectMacroDef(defLight, def)
     }
 }
 
 interface ModVisitor {
-    fun collectImport(import: ImportStub)
-    fun collectItem(item: RsItemElement)
-    fun collectMacroCall(call: MacroCallStub, callPsi: RsMacroCall)
-    fun collectMacroDef(def: MacroStub, defPsi: RsMacro)
+    fun collectItem(item: ItemLight, itemPsi: RsItemElement)
+    fun collectImport(import: ImportLight)
+    fun collectMacroCall(call: MacroCallLight, callPsi: RsMacroCall)
+    fun collectMacroDef(def: MacroDefLight, defPsi: RsMacro)
+    fun afterCollectMod() {}
 }
 
-sealed class VisibilityStub {
-    object Public : VisibilityStub()
-    class Restricted(val inPath: String) : VisibilityStub()
+class CompositeModVisitor(
+    private val visitor1: ModVisitor,
+    private val visitor2: ModVisitor
+) : ModVisitor {
+    override fun collectItem(item: ItemLight, itemPsi: RsItemElement) {
+        visitor1.collectItem(item, itemPsi)
+        visitor2.collectItem(item, itemPsi)
+    }
+
+    override fun collectImport(import: ImportLight) {
+        visitor1.collectImport(import)
+        visitor2.collectImport(import)
+    }
+
+    override fun collectMacroCall(call: MacroCallLight, callPsi: RsMacroCall) {
+        visitor1.collectMacroCall(call, callPsi)
+        visitor2.collectMacroCall(call, callPsi)
+    }
+
+    override fun collectMacroDef(def: MacroDefLight, defPsi: RsMacro) {
+        visitor1.collectMacroDef(def, defPsi)
+        visitor2.collectMacroDef(def, defPsi)
+    }
+
+    override fun afterCollectMod() {
+        visitor1.afterCollectMod()
+        visitor2.afterCollectMod()
+    }
+}
+
+sealed class VisibilityLight : Writeable {
+    object Public : VisibilityLight()
+    class Restricted(val inPath: String) : VisibilityLight()
+
+    override fun writeTo(data: DataOutput) {
+        when (this) {
+            Public -> data.writeBoolean(true)
+            is Restricted -> {
+                data.writeBoolean(false)
+                IOUtil.writeUTF(data, inPath)
+            }
+        }
+    }
 
     companion object {
         val CRATE = Restricted("crate")
         val PRIVATE = Restricted("self")
 
-        fun from(visibility: RsVisibilityOwner): VisibilityStub {
+        fun from(visibility: RsVisibilityOwner): VisibilityLight {
             val vis = visibility.vis ?: return PRIVATE
             return when (vis.stubKind) {
                 RsVisStubKind.PUB -> Public
@@ -153,25 +210,77 @@ sealed class VisibilityStub {
     }
 }
 
-data class ImportStub(
+// todo add `elementType` or at least `isModOrEnum` ?
+// todo add `hasMacroUse`, `pathAttribute` if item is mod ?
+data class ItemLight(
+    val name: String,
+    val visibility: VisibilityLight,
+    val isEnabledByCfg: Boolean,
+    val namespaces: Set<Namespace>
+) : Writeable {
+    override fun writeTo(data: DataOutput) {
+        IOUtil.writeUTF(data, name)
+        visibility.writeTo(data)
+
+        // todo use one byte
+        data.writeBoolean(isEnabledByCfg)
+        data.writeBoolean(Namespace.Types in namespaces)
+        data.writeBoolean(Namespace.Values in namespaces)
+    }
+}
+
+data class ImportLight(
     val usePath: String,  // foo::bar::baz
     val nameInScope: String,
-    val visibility: VisibilityStub,
+    val visibility: VisibilityLight,
     val isEnabledByCfg: Boolean,
     val isGlob: Boolean = false,
     val isExternCrate: Boolean = false,
     val isMacroUse: Boolean = false,
     val isPrelude: Boolean = false  // #[prelude_import]
-)
+) : Writeable {
 
-data class MacroCallStub(val path: String, val body: String, val isEnabledByCfg: Boolean)
+    override fun writeTo(data: DataOutput) {
+        IOUtil.writeUTF(data, usePath)
+        IOUtil.writeUTF(data, nameInScope)
+        visibility.writeTo(data)
+        // todo use one byte
+        data.writeBoolean(isEnabledByCfg)
+        data.writeBoolean(isGlob)
+        data.writeBoolean(isExternCrate)
+        data.writeBoolean(isMacroUse)
+        data.writeBoolean(isPrelude)
+    }
+}
 
-data class MacroStub(
+data class MacroCallLight(
+    val path: String,
+    val body: String,
+    val isEnabledByCfg: Boolean
+) : Writeable {
+
+    override fun writeTo(data: DataOutput) {
+        IOUtil.writeUTF(data, path)
+        IOUtil.writeUTF(data, body)
+        data.writeBoolean(isEnabledByCfg)
+    }
+}
+
+data class MacroDefLight(
     val name: String,
-    val macroBodyStubbed: RsMacroBody,
+    val macroBodyText: String,
+    val macroBody: RsMacroBody,
     val hasMacroExport: Boolean,
     val isEnabledByCfg: Boolean
-)
+) : Writeable {
+
+    override fun writeTo(data: DataOutput) {
+        IOUtil.writeUTF(data, name)
+        IOUtil.writeUTF(data, macroBodyText)
+        data.writeBoolean(hasMacroExport)
+        data.writeBoolean(isEnabledByCfg)
+    }
+}
 
 private fun RsUseSpeck.getFullPathAndNameInScope(): Pair<String, String>? {
     return if (isStarImport) {

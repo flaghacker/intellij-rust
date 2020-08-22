@@ -514,12 +514,33 @@ class RsCfgAttrResolveTest : RsResolveTestBase() {
     fun `test cfg_attr with path on mod declaration`() = stubOnlyResolve("""
     //- bar.rs
         pub fn func() {}
-    //- lib.rs
+    //- main.rs
         #[cfg_attr(intellij_rust, path = "bar.rs")]
         mod foo;
         use foo::*;
         fn main() {
             func();
         }  //^ unresolved
+     """)
+
+    @ExpandMacros
+    @MockEdition(CargoWorkspace.Edition.EDITION_2018)
+    @MockAdditionalCfgOptions("intellij_rust")
+    fun `test macro call in cfg-disabled file`() = stubOnlyResolve("""
+    //- main.rs
+        fn main() {
+            foo::func();
+        }      //^ unresolved
+
+        macro_rules! gen_foo {
+            () => {
+                mod foo {
+                    pub fn func() {}
+                }
+            };
+        }
+
+        #[cfg(not(intellij_rust))]
+        gen_foo!();
      """)
 }
