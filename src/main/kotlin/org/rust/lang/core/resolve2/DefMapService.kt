@@ -16,6 +16,7 @@ import java.util.concurrent.ConcurrentHashMap
 // todo разделить interface и impl
 // todo @Synchronized
 class DefMapService {
+    // todo `ConcurrentHashMap` does not support null values
     // `null` value means there was attempt to build DefMap
     val defMaps: MutableMap<CratePersistentId, CrateDefMap?> = ConcurrentHashMap()
 

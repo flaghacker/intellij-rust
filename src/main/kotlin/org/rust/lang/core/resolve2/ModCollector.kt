@@ -19,6 +19,7 @@ import org.rust.lang.RsConstants
 import org.rust.lang.RsFileType
 import org.rust.lang.core.crate.Crate
 import org.rust.lang.core.macros.RangeMap
+import org.rust.lang.core.macros.shouldIndexFile
 import org.rust.lang.core.psi.*
 import org.rust.lang.core.psi.ext.*
 import org.rust.lang.core.resolve.RsModDeclItemData
@@ -49,6 +50,9 @@ fun buildDefMapContainingExplicitItems(context: CollectorContext): CrateDefMap? 
     val crate = context.crate
     val crateId = crate.id ?: return null
     val crateRoot = crate.rootMod ?: return null
+
+    val crateRootFile = crate.rootModFile ?: return null
+    if (!shouldIndexFile(context.project, crateRootFile)) return null
 
     val externPrelude = getInitialExternPrelude(crate)
     val directDependenciesDefMaps = crate.dependencies

@@ -93,7 +93,7 @@ class CargoBasedCrate(
         try {
             val defMapService = cargoProject.project.defMapService
             val crateId = id ?: return
-            val defMap = buildDefMap(this, indicator)
+            val defMap = buildDefMap(this, indicator) ?: return  // todo return ?
             defMapService.defMaps[crateId] = defMap
         } finally {
             isComputingDefMap = false

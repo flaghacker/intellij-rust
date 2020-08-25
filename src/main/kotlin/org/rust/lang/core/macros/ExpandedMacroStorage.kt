@@ -502,14 +502,6 @@ class SourceFile(
         return extract(calls)
     }
 
-    private fun shouldIndexFile(project: Project, file: VirtualFile): Boolean {
-        val index = ProjectFileIndex.getInstance(project)
-        if (!(index.isInContent(file) || index.isInLibrary(file))) {
-            return false
-        }
-        return !FileTypeManager.getInstance().isFileIgnored(file)
-    }
-
     private fun extract(calls: List<RsMacroCall>?): List<Pipeline.Stage1ResolveAndExpand>? {
         checkReadAccessAllowed() // Needed to access PSI
         checkIsSmartMode(project)
@@ -1038,4 +1030,13 @@ fun VirtualFile.loadMixHash(): HashCode? {
 
     val data = MACRO_MIX_HASH_ATTRIBUTE.readAttribute(this) ?: return null
     return data.readHashCode()
+}
+
+// todo переместить ?
+fun shouldIndexFile(project: Project, file: VirtualFile): Boolean {
+    val index = ProjectFileIndex.getInstance(project)
+    if (!(index.isInContent(file) || index.isInLibrary(file))) {
+        return false
+    }
+    return !FileTypeManager.getInstance().isFileIgnored(file)
 }
