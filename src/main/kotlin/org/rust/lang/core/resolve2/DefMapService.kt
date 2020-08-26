@@ -11,6 +11,8 @@ import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.psi.PsiFile
 import org.rust.lang.core.crate.CratePersistentId
 import org.rust.lang.core.psi.RsFile
+import org.rust.openapiext.pathAsPath
+import java.nio.file.Path
 import java.util.concurrent.ConcurrentHashMap
 
 // todo разделить interface и impl
@@ -28,15 +30,45 @@ class DefMapService {
      */
     val fileModificationStamps: MutableMap<FileId, Pair<Long, CratePersistentId>> = ConcurrentHashMap()
 
+    /** Merged map of [CrateDefMap.missedFiles] for all crates */
+    private val missedFiles: MutableMap<Path, CratePersistentId> = hashMapOf()
+
     // todo name ?
     @Volatile
     private var changedFiles: MutableSet<RsFile> = hashSetOf()
 
     private val changedCrates: MutableSet<CratePersistentId> = hashSetOf()
 
+    @Synchronized  // todo
+    fun afterDefMapBuilt(defMap: CrateDefMap) {
+        val crate = defMap.crate
+
+        // todo ?
+        // fileModificationStamps.entries.removeIf { it.value.second == crate }
+        fileModificationStamps += defMap.fileInfos
+            .mapValues { (_, info) -> info.modificationStamp to crate }
+
+        // todo придумать что-нибудь получше вместо removeIf
+        //  мб хранить в ключах defMap.modificationStamp и сравнивать его после .get() ?
+        missedFiles.entries.removeIf { it.value == crate }
+        missedFiles += defMap.missedFiles.associateWith { crate }
+    }
+
     @Synchronized
     fun onFileChanged(file: RsFile) {
         changedFiles.add(file)
+    }
+
+    @Synchronized
+    fun onFileAdded(file: RsFile) {
+        val path = file.virtualFile.pathAsPath
+        val crate = missedFiles[path] ?: return
+        changedCrates += crate
+    }
+
+    @Synchronized
+    fun onUnknownFileChanged() {
+        // todo
     }
 
     @Synchronized

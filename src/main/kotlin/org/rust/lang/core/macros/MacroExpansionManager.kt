@@ -747,7 +747,11 @@ private class MacroExpansionServiceImplInner(
 
         override fun handleEvent(event: RsPsiTreeChangeEvent) {
             if (!isExpansionModeNew) return
-            val file = event.file as? RsFile ?: return
+            val file = event.file as? RsFile
+            if (file == null) {
+                handleEventWithoutFile(event)
+                return
+            }
             if (RsPsiManager.isIgnorePsiEvents(file)) return
             val virtualFile = file.virtualFile ?: return
             if (virtualFile !is VirtualFileWithId) return
@@ -773,6 +777,21 @@ private class MacroExpansionServiceImplInner(
                     scheduleChangedMacrosUpdate(file.isWorkspaceMember())
                 }
             }
+        }
+
+        private fun handleEventWithoutFile(event: RsPsiTreeChangeEvent) {
+            if (event is ChildAddition.After) {
+                val file = event.child
+                if (file is RsFile) {
+                    project.defMapService.onFileAdded(file)
+                    val isWorkspace = file.isWorkspaceMember()
+                    scheduleChangedMacrosUpdate(isWorkspace)
+                    return
+                }
+            }
+
+            project.defMapService.onUnknownFileChanged()
+            // todo: scheduleChangedMacrosUpdate
         }
 
         override fun rustPsiChanged(file: PsiFile, element: PsiElement, isStructureModification: Boolean) {

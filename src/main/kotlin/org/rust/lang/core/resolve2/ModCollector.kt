@@ -26,10 +26,8 @@ import org.rust.lang.core.resolve.RsModDeclItemData
 import org.rust.lang.core.resolve.collectResolveVariants
 import org.rust.lang.core.resolve.namespaces
 import org.rust.lang.core.resolve.processModDeclResolveVariants
-import org.rust.openapiext.fileId
-import org.rust.openapiext.findFileByMaybeRelativePath
-import org.rust.openapiext.toPsiDirectory
-import org.rust.openapiext.toPsiFile
+import org.rust.openapiext.*
+import java.nio.file.Path
 import kotlin.test.assertEquals
 
 // todo move to facade ?
@@ -245,8 +243,13 @@ class ModCollector(
         val (childMod, hasMacroUse, pathAttribute) = when (item) {
             is RsModItem -> Triple(item, item.hasMacroUse, item.pathAttribute)
             is RsModDeclItem -> {
-                val childMod: RsMod = item.resolve(modData, project) ?: return null
-                Triple(childMod, item.hasMacroUse, item.pathAttribute)
+                val (childMod, childModPossiblePaths) = item.resolveAndGetPossiblePaths(modData, project)
+                    ?: return null
+                if (childMod == null) {
+                    defMap.missedFiles += childModPossiblePaths
+                    return null
+                }
+                Triple(childMod as RsMod, item.hasMacroUse, item.pathAttribute)
             }
             else -> return null
         }
@@ -428,6 +431,42 @@ private fun ModData.asPsiFile(project: Project): PsiFile? =
             return null
         }
 
+private fun RsModDeclItem.resolveAndGetPossiblePaths(containingModData: ModData, project: Project): Pair<RsFile?, List<Path>>? {
+    val pathAttribute = pathAttribute
+    val (parentDirectory, names) = if (pathAttribute == null) {
+        val name = name ?: return null
+        val parentDirectory = containingModData.getOwnedDirectory(project) ?: return null
+        val names = listOf("$name.rs", "$name/mod.rs")
+        parentDirectory to names
+    } else {
+        // https://doc.rust-lang.org/reference/items/modules.html#the-path-attribute
+        val parentDirectory = if (containingModData.isRsFile) {
+            // For path attributes on modules not inside inline module blocks,
+            // the file path is relative to the directory the source file is located.
+            val containingMod = containingModData.asPsiFile(project) ?: return null
+            containingMod.parent
+        } else {
+            // Paths for path attributes inside inline module blocks are relative to
+            // the directory of file including the inline module components as directories.
+            containingModData.getOwnedDirectory(project)
+        } ?: return null
+        val explicitPath = FileUtil.toSystemIndependentName(pathAttribute)
+        parentDirectory to listOf(explicitPath)
+    }
+
+    val file = names
+        .mapNotNull {
+            parentDirectory.virtualFile
+                .findFileByMaybeRelativePath(it)
+                ?.toPsiFile(project)
+                ?.rustFile
+        }
+        .singleOrNull()
+    val paths = names.map { parentDirectory.virtualFile.pathAsPath.resolve(it) }
+    return Pair(file, paths)
+}
+
+// todo remove
 /**
  * We have to use our own resolve for [RsModDeclItem],
  * because sometimes we can't find `containingMod` to set as their `context`,

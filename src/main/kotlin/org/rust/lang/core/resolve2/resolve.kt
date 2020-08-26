@@ -25,6 +25,7 @@ import org.rust.openapiext.testAssert
 import org.rust.stdext.HashCode
 import java.io.DataInputStream
 import java.io.DataOutput
+import java.nio.file.Path
 
 class DefDatabase(
     /** `DefMap`s for some crate and all its dependencies (including transitive) */
@@ -96,6 +97,15 @@ class CrateDefMap(
      * but different [FileInfo.hash] and [FileInfo.modificationStamp]
      */
     val fileInfos: MutableMap<FileId, FileInfo> = hashMapOf()
+
+    /**
+     * Files which currently do not exist, but could affect resolve if created:
+     * - for unresolved mod declarations - `.../name.rs` and `.../name/mod.rs`
+     * - for unresolved `include!` macro - corresponding file
+     *
+     * Note: [missedFiles] should be empty if compilation is successful.
+     */
+    val missedFiles: MutableList<Path> = mutableListOf()
 
     /** For tests */
     val timestamp: Long = System.nanoTime()

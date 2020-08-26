@@ -5,18 +5,14 @@
 
 package org.rust.lang.core.resolve2
 
-import com.intellij.openapi.application.impl.NonBlockingReadActionImpl
 import com.intellij.openapi.application.runWriteAction
 import com.intellij.openapi.vfs.VfsUtil
 import com.intellij.psi.PsiDocumentManager
 import org.intellij.lang.annotations.Language
 import org.rust.ExpandMacros
-import org.rust.RsTestBase
-import org.rust.lang.core.crate.Crate
-import org.rust.lang.core.psi.RsFile
 
 @ExpandMacros  // todo - нужно чтобы включить энергичное построение DefMap
-class RsDefMapSingleFileCachingTest : RsTestBase() {
+class RsDefMapSingleFileCachingTest : RsDefMapCachingTestBase() {
 
     private fun type(text: String = "a"): () -> Unit = {
         myFixture.type(text)
@@ -31,40 +27,24 @@ class RsDefMapSingleFileCachingTest : RsTestBase() {
         PsiDocumentManager.getInstance(project).commitAllDocuments()
     }
 
-    private fun getDefMap(crate: Crate): CrateDefMap {
-        NonBlockingReadActionImpl.waitForAsyncTaskCompletion()
-        return crate.defMap!!
+    private fun doTestChanged(action: () -> Unit, @Language("Rust") code: String) {
+        InlineFile(code).withCaret()
+        doTest(action, shouldChange = true)
     }
 
-    private fun doTest(
-        action: () -> Unit,
-        @Language("Rust") code: String,
-        shouldChange: Boolean
-    ) {
+    private fun doTestNotChanged(action: () -> Unit, @Language("Rust") code: String) {
         InlineFile(code).withCaret()
-        val crate = (myFixture.file as RsFile).crate!!
-        val oldStamp = getDefMap(crate).timestamp
-        action()
-        val newStamp = getDefMap(crate).timestamp
-        val changed = newStamp != oldStamp
-        check(changed == shouldChange) { "DefMap should ${if (shouldChange) "" else "not "}rebuilt" }
+        doTest(action, shouldChange = false)
     }
 
     private fun doTest(
         @Language("Rust") before: String,
         @Language("Rust") after: String,
         shouldChange: Boolean
-    ) = doTest(replaceFileContent(after), "$before /*caret*/", shouldChange)
-
-    private fun doTestChanged(
-        action: () -> Unit,
-        @Language("Rust") code: String
-    ) = doTest(action, code, shouldChange = true)
-
-    private fun doTestNotChanged(
-        action: () -> Unit,
-        @Language("Rust") code: String
-    ) = doTest(action, code, shouldChange = false)
+    ) {
+        InlineFile(before)
+        doTest(replaceFileContent(after), shouldChange)
+    }
 
     private fun doTestChanged(
         @Language("Rust") before: String,

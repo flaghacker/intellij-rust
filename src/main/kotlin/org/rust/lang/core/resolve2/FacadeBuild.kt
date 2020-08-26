@@ -70,8 +70,7 @@ fun buildDefMap(crate: Crate, indicator: ProgressIndicator): CrateDefMap? {
         buildDefMapContainingExplicitItems(context)
     } ?: return null
     DefCollector(project, defMap, context).collect()
-    project.defMapService.fileModificationStamps += defMap.fileInfos
-        .mapValues { (_, info) -> info.modificationStamp to defMap.crate }
+    project.defMapService.afterDefMapBuilt(defMap)
     return defMap
 }
 
