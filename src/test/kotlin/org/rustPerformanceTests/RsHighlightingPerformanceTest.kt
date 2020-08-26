@@ -25,13 +25,12 @@ import kotlin.system.measureTimeMillis
 
 // todo другое имя ?
 class RsHighlightingPerformanceTest : RsRealProjectTestBase() {
-    // It is a performance test, but we don't want to waste time
-    // measuring CPU performance
+    // It is a performance test, but we don't want to waste time measuring CPU performance
     override fun isPerformanceTest(): Boolean = false
 
     private val cargoFilePath: String = "src/cargo/core/resolver/mod.rs"
     fun `test Cargo, measure`() = repeatTest(CARGO, cargoFilePath, ::measureResolveAndHighlight)
-    fun `test Cargo, profile DefMap`() = repeatTest(CARGO, cargoFilePath, ::profileBuildDefMaps)
+    fun `test Cargo, profile build DefMap`() = repeatTest(CARGO, cargoFilePath, ::profileBuildDefMaps)
     fun `test Cargo, profile resolve`() = repeatTest(CARGO, cargoFilePath, ::profileResolve)
 
     private val mysqlAsyncFilePath1: String = "src/conn/mod.rs"
@@ -69,7 +68,7 @@ class RsHighlightingPerformanceTest : RsRealProjectTestBase() {
         for (i in 0..Int.MAX_VALUE) {
             val pool = Executors.newWorkStealingPool()
             val indicator = EmptyProgressIndicator()
-            buildDefMapForAllCrates(project, pool, indicator, async = true)
+            buildDefMapForAllCrates(project, pool, indicator, async = false)
         }
     }
 
