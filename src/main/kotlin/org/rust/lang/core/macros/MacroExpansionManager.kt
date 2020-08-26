@@ -776,11 +776,6 @@ private class MacroExpansionServiceImplInner(
         }
 
         override fun rustPsiChanged(file: PsiFile, element: PsiElement, isStructureModification: Boolean) {
-            if (isStructureModification && file is RsFile) {
-                println("rustPsiChanged: ${file.name} $element $isStructureModification")
-                project.defMapService.onFileChanged(file)
-            }
-
             if (!isExpansionModeNew) return
             val shouldScheduleUpdate =
                 (isStructureModification || element.ancestorOrSelf<RsMacroCall>()?.isTopLevelExpansion == true) &&
@@ -788,6 +783,7 @@ private class MacroExpansionServiceImplInner(
             if (shouldScheduleUpdate && file is RsFile) {
                 val isWorkspace = file.isWorkspaceMember()
                 scheduleChangedMacrosUpdate(isWorkspace)
+                project.defMapService.onFileChanged(file)
             }
         }
 

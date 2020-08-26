@@ -97,6 +97,9 @@ class CrateDefMap(
      */
     val fileInfos: MutableMap<FileId, FileInfo> = hashMapOf()
 
+    /** For tests */
+    val timestamp: Long = System.nanoTime()
+
     fun getModData(modPath: ModPath): ModData? {
         check(crate == modPath.crate)
         return modPath.segments

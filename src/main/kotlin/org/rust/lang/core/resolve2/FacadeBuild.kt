@@ -87,6 +87,9 @@ private fun buildDefMapForChangedCrates(project: Project, indicator: ProgressInd
     val changedCrates = defMapService.takeChangedCrates()
     val changedCratesAll = topSortCratesAndAddReverseDependencies(changedCrates, project)
     println("\tbuildDefMapForChangedCrates: $changedCratesAll")
+    for (crate in changedCratesAll) {
+        defMapService.defMaps.remove(crate.id)
+    }
     // todo async
     for (crate in changedCratesAll) {
         crate.updateDefMap(indicator)
