@@ -25,6 +25,7 @@ import org.rust.lang.core.resolve2.ImportType.NAMED
 import org.rust.lang.core.resolve2.PartialResolvedImport.*
 import org.rust.lang.core.resolve2.Visibility.Invisible
 import org.rust.openapiext.findFileByMaybeRelativePath
+import org.rust.openapiext.pathAsPath
 import org.rust.openapiext.testAssert
 import org.rust.openapiext.toPsiFile
 import org.rust.stdext.HashCode
@@ -404,13 +405,18 @@ class DefCollector(
         val modData = call.containingMod
         val containingFile = PersistentFS.getInstance().findFileById(modData.fileId) ?: return
         val includePath = call.body
+        val parentDirectory = containingFile.parent
         runReadAction {
-            val includingFile = containingFile.parent
+            val includingFile = parentDirectory
                 .findFileByMaybeRelativePath(includePath)
                 ?.toPsiFile(project)
                 ?.rustFile
-                ?: return@runReadAction
-            processExpandedItems(modData, includingFile, call.depth + 1, calculateHash = true)
+            if (includingFile != null) {
+                processExpandedItems(modData, includingFile, call.depth + 1, calculateHash = true)
+            } else {
+                val filePath = parentDirectory.pathAsPath.resolve(includePath)
+                defMap.missedFiles.add(filePath)
+            }
         }
     }
 
