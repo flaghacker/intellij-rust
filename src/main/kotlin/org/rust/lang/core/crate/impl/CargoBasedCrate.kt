@@ -21,6 +21,7 @@ import org.rust.lang.core.psi.RsFile
 import org.rust.lang.core.psi.rustFile
 import org.rust.lang.core.psi.rustStructureModificationTracker
 import org.rust.lang.core.resolve2.CrateDefMap
+import org.rust.lang.core.resolve2.IS_NEW_RESOLVE_ENABLED
 import org.rust.lang.core.resolve2.buildDefMap
 import org.rust.lang.core.resolve2.defMapService
 import org.rust.openapiext.CachedValueDelegate
@@ -71,6 +72,7 @@ class CargoBasedCrate(
 
     override val defMap: CrateDefMap?
         get() {
+            check(IS_NEW_RESOLVE_ENABLED)
             val isMacroExpansionEnabled = cargoProject.project.macroExpansionManager.isMacroExpansionEnabled
             return if (isMacroExpansionEnabled) {
                 val defMapService = cargoProject.project.defMapService
@@ -88,6 +90,7 @@ class CargoBasedCrate(
     @Volatile
     private var isComputingDefMap: Boolean = false
     override fun updateDefMap(indicator: ProgressIndicator) {
+        check(IS_NEW_RESOLVE_ENABLED)
         check(!isComputingDefMap) { "Attempt to compute defMap for $this while it is being computed" }
         isComputingDefMap = true
         try {

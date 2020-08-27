@@ -68,7 +68,7 @@ class RsHighlightingPerformanceTest : RsRealProjectTestBase() {
         for (i in 0..Int.MAX_VALUE) {
             val pool = Executors.newWorkStealingPool()
             val indicator = EmptyProgressIndicator()
-            buildDefMapForAllCrates(project, pool, indicator, async = false)
+            project.buildDefMapForAllCrates(pool, indicator, async = false)
         }
     }
 

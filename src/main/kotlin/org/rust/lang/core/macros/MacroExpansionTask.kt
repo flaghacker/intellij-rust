@@ -92,10 +92,7 @@ abstract class MacroExpansionTaskBase(
             subTaskIndicator = indicator
         }
 
-        if (IS_NEW_RESOLVE_ENABLED) {
-            val isFirstTime = taskType == RsTask.TaskType.MACROS_UNPROCESSED
-            updateDefMapForAllCrates(project, pool, subTaskIndicator, isFirstTime)
-        }
+        updateDefMapForAllCrates(project, pool, subTaskIndicator)
 
         expansionSteps = getMacrosToExpand(dumbService).iterator()
 

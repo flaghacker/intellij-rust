@@ -5,28 +5,41 @@
 
 package org.rust.lang.core.resolve2
 
+import com.intellij.openapi.components.Service
 import com.intellij.openapi.components.service
 import com.intellij.openapi.project.Project
-import com.intellij.openapi.vfs.VirtualFile
-import com.intellij.psi.PsiFile
 import org.rust.lang.core.crate.CratePersistentId
 import org.rust.lang.core.psi.RsFile
 import org.rust.openapiext.pathAsPath
 import java.nio.file.Path
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicBoolean
 
 // todo разделить interface и impl
 // todo @Synchronized
-class DefMapService {
+@Service
+class DefMapService(val project: Project) {
+
     // todo `ConcurrentHashMap` does not support null values
     // `null` value means there was attempt to build DefMap
     val defMaps: MutableMap<CratePersistentId, CrateDefMap?> = ConcurrentHashMap()
 
+    // todo save DefMap to disk
+    private val isFirstTime: AtomicBoolean = AtomicBoolean(true)
+
+    fun isFirstTime(): Boolean = isFirstTime.get()
+
+    fun resetIsFirstTime() = isFirstTime.set(false)
+
+    private val shouldRecheckAllCrates: AtomicBoolean = AtomicBoolean(false)
+
+    fun shouldRecheckAllCrates(): Boolean = shouldRecheckAllCrates.get()
+
+    fun resetShouldRecheckAllCrates() = shouldRecheckAllCrates.set(false)
+
     /**
-     * todo update comment
-     * Contains [PsiFile.getModificationStamp] for rust files of all crates.
-     * Note: [VirtualFile.getModificationStamp] changes only after file is saved to disk.
-     * Todo: Not working after IDE restart ?
+     * todo store [FileInfo] as values ?
+     * See [FileInfo.modificationStamp].
      */
     val fileModificationStamps: MutableMap<FileId, Pair<Long, CratePersistentId>> = ConcurrentHashMap()
 
@@ -44,7 +57,7 @@ class DefMapService {
         val crate = defMap.crate
 
         // todo ?
-        // fileModificationStamps.entries.removeIf { it.value.second == crate }
+        fileModificationStamps.entries.removeIf { it.value.second == crate }
         fileModificationStamps += defMap.fileInfos
             .mapValues { (_, info) -> info.modificationStamp to crate }
 
@@ -54,21 +67,21 @@ class DefMapService {
         missedFiles += defMap.missedFiles.associateWith { crate }
     }
 
-    @Synchronized
-    fun onFileChanged(file: RsFile) {
-        changedFiles.add(file)
+    fun onCargoWorkspaceChanged() {
+        // todo как-нибудь найти изменённый крейт и делать updateDefMap только для него ?
+        shouldRecheckAllCrates.set(true)
     }
 
     @Synchronized
     fun onFileAdded(file: RsFile) {
         val path = file.virtualFile.pathAsPath
         val crate = missedFiles[path] ?: return
-        changedCrates += crate
+        changedCrates.add(crate)
     }
 
     @Synchronized
-    fun onUnknownFileChanged() {
-        // todo
+    fun onFileChanged(file: RsFile) {
+        changedFiles.add(file)
     }
 
     @Synchronized
@@ -83,8 +96,8 @@ class DefMapService {
     fun hasChangedFiles(): Boolean = changedFiles.isNotEmpty()
 
     @Synchronized  // todo use different locks for files and crates
-    fun addChangedCrates(changedCrates: Collection<CratePersistentId>) {
-        this.changedCrates.addAll(changedCrates)
+    fun addChangedCrates(crates: Collection<CratePersistentId>) {
+        changedCrates.addAll(crates)
     }
 
     @Synchronized

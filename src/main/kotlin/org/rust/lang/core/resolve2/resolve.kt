@@ -12,7 +12,6 @@ import com.intellij.openapiext.isUnitTestMode
 import com.intellij.psi.FileViewProvider
 import com.intellij.psi.PsiFile
 import com.intellij.util.io.IOUtil
-import org.rust.cargo.project.workspace.CargoWorkspace
 import org.rust.lang.core.crate.CratePersistentId
 import org.rust.lang.core.psi.RsEnumVariant
 import org.rust.lang.core.psi.RsFile
@@ -67,8 +66,8 @@ class FileInfo(
      * - [Document.getModificationStamp]  // todo ?
      *
      * Notes:
-     * - [VirtualFile] methods update only after file is saved to disk
-     * - Only [VirtualFile.getModificationCount] survive IDE restart
+     * - [VirtualFile] methods is updated only after file is saved to disk
+     * - Only [VirtualFile.getModificationCount] survives IDE restart
      */
     val modificationStamp: Long,
     /** Optimization for [CrateDefMap.getModData] */
@@ -79,7 +78,6 @@ class FileInfo(
 // todo вынести поля нужные только на этапе построения в collector ?
 class CrateDefMap(
     val crate: CratePersistentId,
-    val edition: CargoWorkspace.Edition,
     val root: ModData,
 
     val externPrelude: MutableMap<String, ModData>,
@@ -87,6 +85,7 @@ class CrateDefMap(
     val directDependenciesDefMaps: Map<String, CrateDefMap>,
     allDependenciesDefMaps: Map<CratePersistentId, CrateDefMap>,
     var prelude: ModData?,
+    val metaData: CrateMetaData,
     val crateDescription: String  // only for debug
 ) {
     // todo сделать DefDatabase интерфейсом и использовать другую реализацию (которая вызывает `crate.defMap`) после построения текущей DefMap ?

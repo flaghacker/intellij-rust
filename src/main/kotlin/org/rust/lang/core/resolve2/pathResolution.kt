@@ -32,7 +32,7 @@ fun CrateDefMap.resolvePathFp(containingMod: ModData, path: String, mode: Resolv
         // plain import or absolute path in 2015:
         // crate-relative with fallback to extern prelude
         // (with the simplification in https://github.com/rust-lang/rust/issues/57745)
-        edition == CargoWorkspace.Edition.EDITION_2015
+        metaData.edition == CargoWorkspace.Edition.EDITION_2015
             && (pathKind is PathKind.Absolute || pathKind is PathKind.Plain && mode == ResolveMode.IMPORT) -> {
             val firstSegment = segments.removeAt(0)
             resolveNameInCrateRootOrExternPrelude(firstSegment)

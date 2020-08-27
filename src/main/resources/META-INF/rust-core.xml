@@ -861,7 +861,6 @@
 
         <projectService serviceInterface="org.rust.lang.core.crate.CrateGraphService"
                         serviceImplementation="org.rust.lang.core.crate.impl.CrateGraphServiceImpl"/>
-        <projectService serviceImplementation="org.rust.lang.core.resolve2.DefMapService"/>
 
         <toolWindow id="Cargo"
                     anchor="right"

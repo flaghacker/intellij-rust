@@ -88,12 +88,12 @@ fun buildDefMapContainingExplicitItems(context: CollectorContext): CrateDefMap? 
     )
     val defMap = CrateDefMap(
         crateId,
-        crate.edition,
         crateRootData,
         externPrelude,
         directDependenciesDefMaps,
         allDependenciesDefMaps,
         prelude,
+        CrateMetaData(crate),
         crate.toString()
     )
 

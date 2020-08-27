@@ -790,8 +790,8 @@ private class MacroExpansionServiceImplInner(
                 }
             }
 
-            project.defMapService.onUnknownFileChanged()
-            // todo: scheduleChangedMacrosUpdate
+            project.defMapService.onCargoWorkspaceChanged()
+            scheduleChangedMacrosUpdate(workspaceOnly = true)
         }
 
         override fun rustPsiChanged(file: PsiFile, element: PsiElement, isStructureModification: Boolean) {
