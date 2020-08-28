@@ -9,6 +9,7 @@ import com.intellij.openapi.project.Project
 import com.intellij.openapi.vfs.newvfs.persistent.PersistentFS
 import com.intellij.openapiext.isUnitTestMode
 import org.rust.ide.utils.isEnabledByCfg
+import org.rust.lang.core.crate.Crate
 import org.rust.lang.core.crate.impl.DoctestCrate
 import org.rust.lang.core.psi.RsEnumItem
 import org.rust.lang.core.psi.RsFile
@@ -29,8 +30,7 @@ fun processItemDeclarations2(
     ipm: ItemProcessingMode  // todo
 ): Boolean {
     val project = scope.project
-    val defMap = getDefMap(scope) ?: return false
-    val modData = defMap.getModData(scope) ?: return false
+    val (defMap, modData) = getDefMapAndModData(scope) ?: return false
 
     modData.visibleItems.processEntriesWithName(processor.name) { name, perNs ->
         fun /* todo inline */ VisItem.tryConvertToPsi(namespace: Namespace): RsNamedElement? {
@@ -90,8 +90,7 @@ fun processItemDeclarations2(
 
 fun processMacros(scope: RsMod, processor: RsResolveProcessor): Boolean {
     val project = scope.project
-    val defMap = getDefMap(scope) ?: return false
-    val modData = defMap.getModData(scope) ?: return false
+    val (defMap, modData) = getDefMapAndModData(scope) ?: return false
 
     modData.legacyMacros.processEntriesWithName(processor.name) { name, macroInfo ->
         val visItem = VisItem(macroInfo.path, Visibility.Public)
@@ -108,8 +107,14 @@ fun processMacros(scope: RsMod, processor: RsResolveProcessor): Boolean {
     return false
 }
 
-private fun getDefMap(scope: RsMod): CrateDefMap? {
-    val crate = scope.containingCrate ?: return null
+private fun getDefMapAndModData(mod: RsMod): Pair<CrateDefMap, ModData>? {
+    val crate = mod.containingCrate ?: return null
+    val defMap = getDefMap(crate) ?: return null
+    val modData = defMap.getModData(mod) ?: return null
+    return Pair(defMap, modData)
+}
+
+private fun getDefMap(crate: Crate): CrateDefMap? {
     check(crate !is DoctestCrate) { "doc test crates are not supported by CrateDefMap" }
     val defMap = crate.defMap
     if (defMap == null) {

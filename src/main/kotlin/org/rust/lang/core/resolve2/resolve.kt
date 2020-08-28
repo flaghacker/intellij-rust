@@ -41,6 +41,7 @@ class DefDatabase(
         return tryCastToModData(types)
     }
 
+    // todo оптимизация: хранить в DefMap map из String (modPath) в ModData
     fun tryCastToModData(types: VisItem): ModData? {
         if (!types.isModOrEnum) return null
         return getModData(types.path)
@@ -116,10 +117,10 @@ class CrateDefMap(
             .fold(root as ModData?) { modData, segment -> modData?.childModules?.get(segment) }
     }
 
-    // todo move to facade.rs вместе с ModPath.fromMod
     fun getModData(mod: RsMod): ModData? {
         if (isUnitTestMode) {
-            mod.containingCrate?.id?.let { check(it == crate) }  // todo
+            // todo не очень полезная проверка?)
+            mod.containingCrate?.id?.let { check(it == crate) }
         }
         return getModDataFast(mod)
     }
@@ -343,6 +344,7 @@ sealed class Visibility {
     fun isVisibleFromMod(mod: ModData): Boolean =
         when (this) {
             Public -> true
+            // todo оптимизация: использовать простой цикл for/while вместо Sequence ?
             is Restricted -> mod.parents.contains(inMod)
             Invisible, CfgDisabled -> false
         }
@@ -402,6 +404,7 @@ sealed class Visibility {
 /** Path to a module or an item in module */
 data class ModPath(
     val crate: CratePersistentId,
+    // todo оптимизация: хранить `path`, а `segments` считать на лету ?
     val segments: List<String>
     // val fileId: FileId,  // id of containing file
     // val fileRelativePath: String  // empty for pathRsFile

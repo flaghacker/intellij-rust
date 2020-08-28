@@ -368,6 +368,8 @@ class DefCollector(
         //     - для путей внутри RsUseItem и RsMacroCall можно и не искать, просто использовать их userData
         //     - для RsMacroCall body можно делать parentOfType<RsMacroCall>()
         //  нельзя - потому что findElementBy(offset) работает на psi а не на stubs
+        // todo: оптимизация - написать свой stubDescendantsOfTypeStrict, которой не заходит внутрь RsItemElement
+        //  то есть обрабатывает top level items и заходит внутри RsMod
         loop@ for (element in file.stubDescendantsOfTypeStrict<RsElement>()) {
             when (element) {
                 is RsUseItem -> {

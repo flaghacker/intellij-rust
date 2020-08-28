@@ -182,18 +182,17 @@ class ModCollector(
     }
 
     override fun collectImport(import: ImportLight) {
-        val isEnabledByCfg = modData.isEnabledByCfg && import.isEnabledByCfg
         context.imports += Import(
             containingMod = modData,
             usePath = import.usePath,
             nameInScope = import.nameInScope,
-            visibility = convertVisibility(import.visibility, isEnabledByCfg),
+            visibility = convertVisibility(import.visibility, import.isEnabledByCfg),
             isGlob = import.isGlob,
             isExternCrate = import.isExternCrate,
             isMacroUse = import.isPrelude
         )
 
-        if (isEnabledByCfg && import.isExternCrate && import.isMacroUse) {
+        if (import.isEnabledByCfg && import.isExternCrate && import.isMacroUse) {
             importExternCrateMacros(import.usePath)
         }
     }
@@ -230,8 +229,7 @@ class ModCollector(
     // todo причём здесь RsFile ?
     /** [name] passed for performance reason, because [RsFile.modName] is slow */
     private fun convertToVisItem(item: ItemLight, itemPsi: RsItemElement): VisItem? {
-        val isEnabledByCfg = modData.isEnabledByCfg && item.isEnabledByCfg
-        val visibility = convertVisibility(item.visibility, isEnabledByCfg)
+        val visibility = convertVisibility(item.visibility, item.isEnabledByCfg)
         val itemPath = modData.path.append(item.name)
         val isModOrEnum = itemPsi is RsMod || itemPsi is RsModDeclItem || itemPsi is RsEnumItem
         return VisItem(itemPath, visibility, isModOrEnum)
@@ -253,8 +251,7 @@ class ModCollector(
             }
             else -> return null
         }
-        // Note: don't use `childMod.isEnabledByCfgSelf`, because `isEnabledByCfg` doesn't work for `RsFile`
-        val isEnabledByCfg = modData.isEnabledByCfg && itemLight.isEnabledByCfg
+        val isEnabledByCfg = itemLight.isEnabledByCfg
         val childModData = collectChildModule(childMod, itemLight.name, isEnabledByCfg, pathAttribute)
         if (hasMacroUse && isEnabledByCfg) modData.legacyMacros += childModData.legacyMacros
         return childModData
@@ -305,20 +302,20 @@ class ModCollector(
         return childModData
     }
 
-    private fun collectEnumAsModData(enumLight: ItemLight, enum: RsEnumItem): ModData {
-        val enumName = enumLight.name
+    private fun collectEnumAsModData(enum: ItemLight, enumPsi: RsEnumItem): ModData {
+        val enumName = enum.name
         val enumPath = modData.path.append(enumName)
         val enumData = ModData(
             parent = modData,
             crate = modData.crate,
             path = enumPath,
-            isEnabledByCfg = modData.isEnabledByCfg && enumLight.isEnabledByCfg,
+            isEnabledByCfg = enum.isEnabledByCfg,
             fileId = modData.fileId,
             fileRelativePath = "${modData.fileRelativePath}::$enumName",
             ownedDirectoryId = modData.ownedDirectoryId,  // actually can use any value here
             isEnum = true
         )
-        for (variantPsi in enum.variants) {
+        for (variantPsi in enumPsi.variants) {
             val variantName = variantPsi.name ?: continue
             val variantPath = enumPath.append(variantName)
             val variantVisibility = if (enumData.isEnabledByCfg) Visibility.Public else Visibility.CfgDisabled
@@ -338,8 +335,6 @@ class ModCollector(
     }
 
     override fun collectMacroDef(def: MacroDefLight, defPsi: RsMacro) {
-        val isEnabledByCfg = modData.isEnabledByCfg && def.isEnabledByCfg
-        if (!isEnabledByCfg) return  // todo ?
         val bodyHash = defPsi.bodyHash ?: return
         val macroPath = modData.path.append(def.name)
 

@@ -23,9 +23,9 @@ import java.io.DataOutput
  * - When checking if file was changed: calculating hash
  */
 class ModCollectorBase private constructor(
-    val visitor: ModVisitor,
-    val crate: Crate,
-    val isEnabledByCfg: Boolean
+    private val visitor: ModVisitor,
+    private val crate: Crate,
+    private val isModEnabledByCfg: Boolean
 ) {
 
     /** [itemsOwner] - [RsMod] or [RsForeignModItem] */
@@ -69,7 +69,7 @@ class ModCollectorBase private constructor(
     }
 
     private fun collectUseItem(useItem: RsUseItem) {
-        val isEnabledByCfg = useItem.isEnabledByCfgSelf(crate)
+        val isEnabledByCfg = isModEnabledByCfg && useItem.isEnabledByCfgSelf(crate)
         val visibility = VisibilityLight.from(useItem)
         val hasPreludeImport = useItem.hasPreludeImport
         // todo move dollarCrateId from RsUseItem to RsPath
@@ -93,7 +93,7 @@ class ModCollectorBase private constructor(
             usePath = externCrate.referenceName,
             nameInScope = externCrate.nameWithAlias,
             visibility = VisibilityLight.from(externCrate),
-            isEnabledByCfg = externCrate.isEnabledByCfgSelf(crate),
+            isEnabledByCfg = isModEnabledByCfg && externCrate.isEnabledByCfgSelf(crate),
             isExternCrate = true,
             isMacroUse = externCrate.hasMacroUse
         )
@@ -107,14 +107,15 @@ class ModCollectorBase private constructor(
         val itemLight = ItemLight(
             name = name,
             visibility = VisibilityLight.from(item),
-            isEnabledByCfg = item.isEnabledByCfgSelf(crate),
+            isEnabledByCfg = isModEnabledByCfg && item.isEnabledByCfgSelf(crate),
             namespaces = item.namespaces
         )
         visitor.collectItem(itemLight, item)
     }
 
     private fun collectMacroCall(call: RsMacroCall) {
-        if (!isEnabledByCfg || !call.isEnabledByCfgSelf(crate)) return
+        val isEnabledByCfg = isModEnabledByCfg && call.isEnabledByCfgSelf(crate)
+        if (!isEnabledByCfg) return
         val body = call.includeMacroArgument?.expr?.value ?: call.macroBody ?: return
         val path = call.path.fullPath
         // todo move dollarCrateId from RsMacro to RsPath
@@ -126,12 +127,13 @@ class ModCollectorBase private constructor(
 
     private fun collectMacroDef(def: RsMacro) {
         // check(def.stub != null)  // todo
+        val isEnabledByCfg = isModEnabledByCfg && def.isEnabledByCfgSelf(crate)
+        if (!isEnabledByCfg) return  // todo
         val defLight = MacroDefLight(
             name = def.name ?: return,
             macroBodyText = def.greenStub?.macroBody ?: def.macroBodyStubbed?.text ?: return,
             macroBody = def.macroBodyStubbed ?: return,
-            hasMacroExport = def.hasMacroExport,
-            isEnabledByCfg = def.isEnabledByCfgSelf(crate)
+            hasMacroExport = def.hasMacroExport
         )
         visitor.collectMacroDef(defLight, def)
     }
@@ -271,16 +273,17 @@ data class MacroCallLight(val path: String, val body: String) : Writeable {
 data class MacroDefLight(
     val name: String,
     val macroBodyText: String,
+    // todo: если [RsMacroBody] получается из строки, то он парсится каждый раз заново
+    //  но необязательно данный макрос будет использован
+    //  поэтому мб парсить лениво (хранить или строку или RsMacroBody)?
     val macroBody: RsMacroBody,
-    val hasMacroExport: Boolean,
-    val isEnabledByCfg: Boolean
+    val hasMacroExport: Boolean
 ) : Writeable {
 
     override fun writeTo(data: DataOutput) {
         IOUtil.writeUTF(data, name)
         IOUtil.writeUTF(data, macroBodyText)
         data.writeBoolean(hasMacroExport)
-        data.writeBoolean(isEnabledByCfg)
     }
 }
 
