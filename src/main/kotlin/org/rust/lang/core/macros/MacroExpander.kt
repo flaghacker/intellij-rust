@@ -280,6 +280,7 @@ class MacroExpander(val project: Project) {
                                 if (i != 0) {
                                     sb.delete(sb.length - separator.length, sb.length)
                                 }
+                                ranges.removeIf { it.dstOffset >= sb.length }
                                 break
                             }
                             nestingState.idx += 1
