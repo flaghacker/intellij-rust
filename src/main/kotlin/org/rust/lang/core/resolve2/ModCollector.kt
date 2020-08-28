@@ -490,17 +490,19 @@ private fun RsModDeclItem.resolve(modData: ModData, project: Project): RsFile? {
     return files.singleOrNull() as RsFile?
 }
 
-/** Have to pass [pathAttribute], because [RsFile.pathAttribute] triggers resolve */
+/**
+ * Have to pass [pathAttribute], because [RsFile.pathAttribute] triggers resolve.
+ * See also: [RsMod.getOwnedDirectory]
+ */
 private fun RsMod.getOwnedDirectory(parentMod: ModData, pathAttribute: String?): PsiDirectory? {
     if (this is RsFile && name == RsConstants.MOD_RS_FILE) return parent
 
     val (parentDirectory, path) = if (pathAttribute != null) {
-        val parentDirectory = if (parentMod.isRsFile) {
-            parentMod.asPsiFile(project)?.parent
-        } else {
-            parentMod.getOwnedDirectory(project)
+        when {
+            this is RsFile -> return parent
+            parentMod.isRsFile -> parentMod.asPsiFile(project)?.parent to pathAttribute
+            else -> parentMod.getOwnedDirectory(project) to pathAttribute
         }
-        parentDirectory to pathAttribute
     } else {
         parentMod.getOwnedDirectory(project) to name
     }
