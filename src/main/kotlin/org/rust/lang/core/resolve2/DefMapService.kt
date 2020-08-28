@@ -10,6 +10,7 @@ import com.intellij.openapi.components.service
 import com.intellij.openapi.project.Project
 import org.rust.lang.core.crate.CratePersistentId
 import org.rust.lang.core.psi.RsFile
+import org.rust.openapiext.fileId
 import org.rust.openapiext.pathAsPath
 import java.nio.file.Path
 import java.util.concurrent.ConcurrentHashMap
@@ -77,6 +78,13 @@ class DefMapService(val project: Project) {
         val path = file.virtualFile.pathAsPath
         val crate = missedFiles[path] ?: return
         changedCrates.add(crate)
+    }
+
+    @Synchronized
+    fun onFileRemoved(file: RsFile) {
+        val fileId = file.virtualFile.fileId
+        val (_, crateId) = fileModificationStamps[fileId] ?: return
+        changedCrates.add(crateId)
     }
 
     @Synchronized

@@ -780,18 +780,21 @@ private class MacroExpansionServiceImplInner(
         }
 
         private fun handleEventWithoutFile(event: RsPsiTreeChangeEvent) {
-            if (event is ChildAddition.After) {
-                val file = event.child
-                if (file is RsFile) {
+            when (event) {
+                is ChildAddition.After -> {
+                    val file = event.child as? RsFile ?: return
                     project.defMapService.onFileAdded(file)
-                    val isWorkspace = file.isWorkspaceMember()
-                    scheduleChangedMacrosUpdate(isWorkspace)
-                    return
+                    scheduleChangedMacrosUpdate(file.isWorkspaceMember())
                 }
+                is ChildRemoval.Before -> {
+                    val file = event.child as? RsFile ?: return
+                    project.defMapService.onFileRemoved(file)
+                    scheduleChangedMacrosUpdate(file.isWorkspaceMember())
+                }
+                else -> Unit  // todo other events ?
             }
 
             project.defMapService.onCargoWorkspaceChanged()
-            scheduleChangedMacrosUpdate(workspaceOnly = true)
         }
 
         override fun rustPsiChanged(file: PsiFile, element: PsiElement, isStructureModification: Boolean) {
