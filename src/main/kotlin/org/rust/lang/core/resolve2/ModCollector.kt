@@ -178,7 +178,7 @@ class ModCollector(
         } else {
             this
         }
-        ModCollectorBase(visitor, crate).collectMod(mod)
+        ModCollectorBase.collectMod(mod, modData.isEnabledByCfg, visitor, crate)
     }
 
     override fun collectImport(import: ImportLight) {
@@ -329,9 +329,9 @@ class ModCollector(
     }
 
     override fun collectMacroCall(call: MacroCallLight, callPsi: RsMacroCall) {
-        val isEnabledByCfg = modData.isEnabledByCfg && call.isEnabledByCfg
-        if (!isEnabledByCfg) return  // todo
+        check(modData.isEnabledByCfg) { "for performance reasons cfg-disabled macros should not be collected" }
         val bodyHash = callPsi.bodyHash
+        if (bodyHash == null && call.path != "include") return
         val macroDef = if (call.path.contains("::")) null else modData.legacyMacros[call.path]
         val dollarCrateMap = callPsi.getUserData(RESOLVE_RANGE_MAP_KEY) ?: RangeMap.EMPTY
         context.macroCalls += MacroCallInfo(modData, call.path, call.body, bodyHash, macroDepth, macroDef, dollarCrateMap)

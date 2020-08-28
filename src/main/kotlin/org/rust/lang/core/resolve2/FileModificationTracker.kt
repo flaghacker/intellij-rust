@@ -33,8 +33,15 @@ fun isFileChanged(file: RsFile, defMap: CrateDefMap): Boolean {
     val crate = runReadAction { file.project.crateGraph.findCrateById(crateId) } ?: return false
 
     val hashCalculator = HashCalculator()
-    val visitor = ModLightCollector(crate, hashCalculator, fileRelativePath = "", collectChildModules = true)
-    ModCollectorBase(visitor, crate).collectMod(file)
+    val isEnabledByCfg = file.isDeeplyEnabledByCfg
+    val visitor = ModLightCollector(
+        crate,
+        hashCalculator,
+        fileRelativePath = "",
+        isEnabledByCfg = isEnabledByCfg,
+        collectChildModules = true
+    )
+    ModCollectorBase.collectMod(file, isEnabledByCfg, visitor, crate)
     return hashCalculator.getFileHash() != fileInfo.hash
 }
 
@@ -76,8 +83,10 @@ class HashCalculator {
     // because two modules with different cfg attributes can have same `fileRelativePath`
     private val modulesHash: MutableList<Pair<String /* fileRelativePath */, HashCode>> = mutableListOf()
 
-    fun getVisitor(crate: Crate, fileRelativePath: String): ModVisitor =
-        ModLightCollector(crate, this, fileRelativePath)
+    fun getVisitor(crate: Crate, fileRelativePath: String): ModVisitor {
+        val isEnabledByCfg = true  // will not be used because `collectChildModules = false`
+        return ModLightCollector(crate, this, fileRelativePath, isEnabledByCfg)
+    }
 
     fun onCollectMod(fileRelativePath: String, hash: HashCode) {
         modulesHash += fileRelativePath to hash
@@ -98,6 +107,7 @@ private class ModLightCollector(
     private val crate: Crate,
     private val hashCalculator: HashCalculator,
     private val fileRelativePath: String,
+    private val isEnabledByCfg: Boolean,
     private val collectChildModules: Boolean = false
 ) : ModVisitor {
 
@@ -106,7 +116,7 @@ private class ModLightCollector(
     override fun collectItem(item: ItemLight, itemPsi: RsItemElement) {
         modData.items += item
         if (collectChildModules && itemPsi is RsMod) {
-            collectMod(itemPsi, item.name)
+            collectMod(itemPsi, item.name, item.isEnabledByCfg)
         }
     }
 
@@ -127,9 +137,16 @@ private class ModLightCollector(
         hashCalculator.onCollectMod(fileRelativePath, fileHash)
     }
 
-    private fun collectMod(mod: RsMod, modName: String) {
+    private fun collectMod(mod: RsMod, modName: String, isModEnabledByCfgSelf: Boolean) {
         val fileRelativePath = "$fileRelativePath::$modName"
-        val visitor = ModLightCollector(crate, hashCalculator, fileRelativePath, collectChildModules = true)
-        ModCollectorBase(visitor, crate).collectMod(mod)
+        val isModEnabledByCfg = isEnabledByCfg && isModEnabledByCfgSelf
+        val visitor = ModLightCollector(
+            crate,
+            hashCalculator,
+            fileRelativePath,
+            isModEnabledByCfg,
+            collectChildModules = true
+        )
+        ModCollectorBase.collectMod(mod, isModEnabledByCfg, visitor, crate)
     }
 }

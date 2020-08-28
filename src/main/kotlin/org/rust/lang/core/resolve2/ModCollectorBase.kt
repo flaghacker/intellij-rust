@@ -22,12 +22,11 @@ import java.io.DataOutput
  * - When collecting expanded items: filling ModData
  * - When checking if file was changed: calculating hash
  */
-class ModCollectorBase(val visitor: ModVisitor, val crate: Crate) {
-
-    fun collectMod(mod: RsMod) {
-        collectElements(mod)
-        visitor.afterCollectMod()
-    }
+class ModCollectorBase private constructor(
+    val visitor: ModVisitor,
+    val crate: Crate,
+    val isEnabledByCfg: Boolean
+) {
 
     /** [itemsOwner] - [RsMod] or [RsForeignModItem] */
     private fun collectElements(itemsOwner: RsItemsOwner) {
@@ -115,13 +114,13 @@ class ModCollectorBase(val visitor: ModVisitor, val crate: Crate) {
     }
 
     private fun collectMacroCall(call: RsMacroCall) {
-        val isEnabledByCfg = call.isEnabledByCfgSelf(crate)
+        if (!isEnabledByCfg || !call.isEnabledByCfgSelf(crate)) return
         val body = call.includeMacroArgument?.expr?.value ?: call.macroBody ?: return
         val path = call.path.fullPath
         // todo move dollarCrateId from RsMacro to RsPath
         val dollarCrateId = call.path.getUserData(RESOLVE_DOLLAR_CRATE_ID_KEY)  // for `$crate::foo!()`
         val pathAdjusted = adjustPathWithDollarCrate(path, dollarCrateId)
-        val callLight = MacroCallLight(pathAdjusted, body, isEnabledByCfg)
+        val callLight = MacroCallLight(pathAdjusted, body)
         visitor.collectMacroCall(callLight, call)
     }
 
@@ -135,6 +134,14 @@ class ModCollectorBase(val visitor: ModVisitor, val crate: Crate) {
             isEnabledByCfg = def.isEnabledByCfgSelf(crate)
         )
         visitor.collectMacroDef(defLight, def)
+    }
+
+    companion object {
+        fun collectMod(mod: RsMod, isEnabledByCfg: Boolean, visitor: ModVisitor, crate: Crate) {
+            val collector = ModCollectorBase(visitor, crate, isEnabledByCfg)
+            collector.collectElements(mod)
+            collector.visitor.afterCollectMod()
+        }
     }
 }
 
@@ -253,16 +260,11 @@ data class ImportLight(
     }
 }
 
-data class MacroCallLight(
-    val path: String,
-    val body: String,
-    val isEnabledByCfg: Boolean
-) : Writeable {
+data class MacroCallLight(val path: String, val body: String) : Writeable {
 
     override fun writeTo(data: DataOutput) {
         IOUtil.writeUTF(data, path)
         IOUtil.writeUTF(data, body)
-        data.writeBoolean(isEnabledByCfg)
     }
 }
 
