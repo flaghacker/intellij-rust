@@ -14,6 +14,7 @@ import com.intellij.psi.stubs.IStubElementType
 import com.intellij.psi.tree.TokenSet
 import com.intellij.psi.util.CachedValueProvider
 import com.intellij.psi.util.CachedValuesManager
+import org.rust.lang.core.crate.Crate
 import org.rust.lang.core.macros.*
 import org.rust.lang.core.psi.*
 import org.rust.lang.core.psi.RsElementTypes.*
@@ -81,7 +82,10 @@ private val MACRO_ARGUMENT_TYPES: TokenSet = tokenSetOf(
 val RsMacroCall.macroArgumentElement: RsElement?
     get() = node.findChildByType(MACRO_ARGUMENT_TYPES)?.psi as? RsElement
 
-val RsExpr.value: String? get() {
+val RsExpr.value: String? get() = getValue(null)
+
+/** [crateOrNull] is passed as optimization */
+fun RsExpr.getValue(crateOrNull: Crate?): String? {
     return when (this) {
         is RsLitExpr -> stringValue
         is RsMacroExpr -> {
@@ -98,7 +102,7 @@ val RsExpr.value: String? get() {
                 }
                 "env" -> {
                     val expr = macroCall.envMacroArgument?.variableNameExpr as? RsLitExpr ?: return null
-                    val crate = expr.containingCrate ?: return null
+                    val crate = crateOrNull ?: expr.containingCrate ?: return null
                     when (val variableName = expr.value) {
                         "OUT_DIR" -> crate.outDir?.path
                         else -> crate.env[variableName]

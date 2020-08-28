@@ -116,7 +116,7 @@ class ModCollectorBase private constructor(
     private fun collectMacroCall(call: RsMacroCall) {
         val isEnabledByCfg = isModEnabledByCfg && call.isEnabledByCfgSelf(crate)
         if (!isEnabledByCfg) return
-        val body = call.includeMacroArgument?.expr?.value ?: call.macroBody ?: return
+        val body = call.includeMacroArgument?.expr?.getValue(crate) ?: call.macroBody ?: return
         val path = call.path.fullPath
         // todo move dollarCrateId from RsMacro to RsPath
         val dollarCrateId = call.path.getUserData(RESOLVE_DOLLAR_CRATE_ID_KEY)  // for `$crate::foo!()`
