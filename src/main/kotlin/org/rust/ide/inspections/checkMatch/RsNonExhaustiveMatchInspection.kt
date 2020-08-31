@@ -38,7 +38,7 @@ private fun checkExhaustive(match: RsMatchExpr, holder: RsProblemsHolder) {
     val matrix = match.arms
         .filter { it.matchArmGuard == null }
         .calculateMatrix()
-        .takeIf { it.isEmpty() || it.type !is TyUnknown }
+        .takeIf { it.isWellTyped() }
         ?: return
 
     val wild = Pattern.wild(matchedExprType)

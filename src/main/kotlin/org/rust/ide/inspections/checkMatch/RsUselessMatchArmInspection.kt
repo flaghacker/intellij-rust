@@ -9,10 +9,10 @@ import com.intellij.codeInspection.ProblemHighlightType
 import com.intellij.openapi.util.TextRange
 import com.intellij.psi.PsiElement
 import com.intellij.psi.impl.source.tree.LeafPsiElement
-import org.rust.ide.inspections.lints.RsLint
-import org.rust.ide.inspections.lints.RsLintInspection
 import org.rust.ide.inspections.RsProblemsHolder
 import org.rust.ide.inspections.fixes.SubstituteTextFix
+import org.rust.ide.inspections.lints.RsLint
+import org.rust.ide.inspections.lints.RsLintInspection
 import org.rust.lang.core.psi.RsElementTypes.OR
 import org.rust.lang.core.psi.RsMatchArm
 import org.rust.lang.core.psi.RsMatchExpr
@@ -43,7 +43,7 @@ class RsUselessMatchArmInspection : RsLintInspection() {
 fun checkUselessArm(match: RsMatchExpr, holder: RsProblemsHolder) {
     val matrix = match.arms
         .calculateMatrix()
-        .takeIf { it.type !is TyUnknown }
+        .takeIf { it.isNotEmpty() && it.isWellTyped() }
         ?: return
 
     val armPats = match.arms.flatMap { it.patList }
