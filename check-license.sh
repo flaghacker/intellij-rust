@@ -8,6 +8,8 @@ PREAMBLE=$(cat <<-EOF
 EOF
 )
 
+derp
+
 NO_LICENSE=$(find . -type f -name "*.kt"  -print0 | xargs -0 grep -L -F "$PREAMBLE")
 
 if [[ $NO_LICENSE ]]; then
